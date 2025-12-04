@@ -69,10 +69,10 @@ const allSidebarItems: NavGroup[] = [
       },
       {
         title: "Drawing Analyzer",
-        url: "/analyzer", // Matches the page path: /app/(main)/analyzer/page.tsx
-        icon: FileText,   // Appropriate icon for document analysis
-        roles: ["manager", "hr", "sales", "production"], // Visible to all major roles
-        isNew: true, // Optionally mark as new
+        url: "/dashboard/analyzer", // FIXED: Changed from /analyzer to /dashboard/analyzer
+        icon: FileText,
+        roles: ["manager", "hr", "sales", "production"],
+        isNew: true,
       },
       {
         title: "Sales Pipeline",
