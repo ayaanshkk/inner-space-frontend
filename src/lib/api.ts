@@ -29,7 +29,7 @@ function redirectToLogin() {
 }
 
 // ✅ Helper to add timeout to fetch calls
-async function fetchWithTimeout(url: string, options: RequestInit = {}, timeout = 15000) { // ✅ Increased from 5s to 15s
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeout = 60000) { // ✅ Increased to 60s for Render spin-up
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
   
@@ -93,11 +93,11 @@ export async function fetchWithAuth(path: string, options: RequestInit = {}) {
   };
 
   try {
-    // ✅ Increased timeout to 15 seconds for backend operations
+    // ✅ Increased timeout to 60 seconds for backend operations (Render spin-up)
     const response = await fetchWithTimeout(url, {
       ...options,
       headers,
-    }, 15000);
+    }, 60000);
 
     // ✅ FIX: Mock Auth Bypass (Updated)
     // If we get a 401, we create a new successful Response object (status 200) 
@@ -118,8 +118,8 @@ export async function fetchWithAuth(path: string, options: RequestInit = {}) {
     return response;
   } catch (error: any) {
     if (error.name === 'AbortError') {
-      console.error("⏱️ Request timeout - backend not responding");
-      throw new Error("Request timeout");
+      console.error("⏱️ Request timeout - backend not responding (waited 60s)");
+      throw new Error("Request timeout - backend may be sleeping");
     }
     throw error;
   }
@@ -226,6 +226,40 @@ export const api = {
     const response = await fetchWithAuth(`/jobs/${jobId}/stage`, {
       method: "PATCH",
       body: JSON.stringify({ stage, reason, updated_by: updatedBy }),
+    });
+    return handleApiResponse(response);
+  },
+
+  // ASSIGNMENT ENDPOINTS (for schedule)
+  async getAssignments() {
+    try {
+      const response = await fetchWithAuth("/assignments");
+      return await handleApiResponse(response);
+    } catch (error) {
+      console.warn("⚠️ getAssignments failed, returning empty data");
+      return [];
+    }
+  },
+
+  async createAssignment(assignmentData: any) {
+    const response = await fetchWithAuth("/assignments", {
+      method: "POST",
+      body: JSON.stringify(assignmentData),
+    });
+    return handleApiResponse(response);
+  },
+
+  async updateAssignment(assignmentId: string, assignmentData: any) {
+    const response = await fetchWithAuth(`/assignments/${assignmentId}`, {
+      method: "PUT",
+      body: JSON.stringify(assignmentData),
+    });
+    return handleApiResponse(response);
+  },
+
+  async deleteAssignment(assignmentId: string) {
+    const response = await fetchWithAuth(`/assignments/${assignmentId}`, {
+      method: "DELETE",
     });
     return handleApiResponse(response);
   },

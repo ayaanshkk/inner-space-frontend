@@ -1,12 +1,13 @@
 'use client'
 
 import React, { useState, useCallback } from 'react'
-import { Upload, Settings, FileText, Zap, CheckCircle, AlertCircle, RefreshCw, FileImage, Download, Eye } from 'lucide-react'
+import { Upload, Settings, FileText, Zap, CheckCircle, AlertCircle, RefreshCw, FileImage, Download, Eye, Brain } from 'lucide-react'
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import UploadArea from '@/components/UploadArea'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import AnalyzerResults from '@/components/AnalyzerResults'
+import EditableCabinetTable from '@/components/EditableCabinetTable'
 import { useAuth } from '@/contexts/AuthContext'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
@@ -20,13 +21,24 @@ interface ConfigState {
     countertop_deduction: number;
 }
 
+interface Cabinet {
+    id: number;
+    width: number;
+    type: string;
+    height: number;
+    depth: number;
+}
+
 export default function AnalyzerPage() {
     const { user } = useAuth();
     
     const [uploadedFile, setUploadedFile] = useState<File | null>(null)
     const [isAnalyzing, setIsAnalyzing] = useState(false)
+    const [isExtracting, setIsExtracting] = useState(false)
     const [analysisResults, setAnalysisResults] = useState<any>(null)
+    const [extractedCabinets, setExtractedCabinets] = useState<Cabinet[] | null>(null)
     const [error, setError] = useState<string | null>(null)
+    const [analysisMode, setAnalysisMode] = useState<'quick' | 'smart' | null>(null)
     
     const [config, setConfig] = useState<ConfigState>({
         back_width_offset: 36,
@@ -40,13 +52,17 @@ export default function AnalyzerPage() {
     const handleFileUpload = useCallback((file: File | null) => {
         setUploadedFile(file)
         setAnalysisResults(null)
+        setExtractedCabinets(null)
         setError(null)
+        setAnalysisMode(null)
     }, [])
 
     const resetAnalysis = () => {
         setUploadedFile(null)
         setAnalysisResults(null)
+        setExtractedCabinets(null)
         setError(null)
+        setAnalysisMode(null)
     }
 
     const handleConfigChange = (key: keyof ConfigState, value: string) => {
@@ -54,7 +70,8 @@ export default function AnalyzerPage() {
         setConfig(prev => ({ ...prev, [key]: intValue }))
     }
 
-    const handleAnalyze = async () => {
+    // OLD SYSTEM - Quick single cabinet analysis
+    const handleQuickAnalyze = async () => {
         if (!uploadedFile) {
             setError("Please upload a file to begin analysis.");
             return;
@@ -62,6 +79,7 @@ export default function AnalyzerPage() {
 
         setIsAnalyzing(true)
         setError(null)
+        setAnalysisMode('quick')
 
         try {
             const formData = new window.FormData()
@@ -78,44 +96,104 @@ export default function AnalyzerPage() {
 
             const contentType = response.headers.get('content-type')
             if (!contentType || !contentType.includes('application/json')) {
-                const textResponse = await response.text()
-                throw new Error(`Server returned non-JSON response. Status: ${response.status}. The backend may not be running or the endpoint may not exist.`)
+                throw new Error(`Server returned non-JSON response. Status: ${response.status}`)
             }
 
             const result = await response.json()
 
             if (!response.ok || result.error) {
-                // Provide more specific error messages based on the error type
-                let errorMessage = result.message || result.error || 'Analysis failed due to server error.'
-                
-                // Check for specific error patterns and provide helpful guidance
-                if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {
-                    errorMessage = 'Analysis timed out. The AI service took too long to respond. Please try again with a clearer image or check your internet connection.'
-                } else if (errorMessage.includes('API key') || errorMessage.includes('not configured')) {
-                    errorMessage = 'API keys are not configured properly. Please contact the administrator to set up Google Cloud Vision and OpenAI API keys.'
-                } else if (errorMessage.includes('no valid cutting list') || errorMessage.includes('failed to extract')) {
-                    errorMessage = 'Unable to extract measurements from the drawing. Please ensure the image is clear, contains visible dimensions, and is a technical drawing of a kitchen cabinet.'
-                } else if (errorMessage.includes('DrawingAnalyzer not initialized')) {
-                    errorMessage = 'Analysis service is not properly initialized. Please contact the administrator to check server dependencies.'
-                }
-                
+                let errorMessage = result.message || result.error || 'Analysis failed'
                 throw new Error(errorMessage)
             }
 
             setAnalysisResults(result)
         } catch (err: any) {
             console.error('Analysis error:', err)
-            
-            if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
-                setError('Cannot connect to backend server. Please ensure the Flask server is running at ' + BACKEND_URL)
-            } else if (err.message.includes('non-JSON response')) {
-                setError(err.message)
-            } else {
-                setError(err.message || 'Analysis failed. Please check the backend server and API keys.')
-            }
+            setError(err.message || 'Analysis failed')
         } finally {
             setIsAnalyzing(false)
         }
+    }
+
+    // NEW SYSTEM - Smart layout analysis with editable table
+    const handleSmartAnalyze = async () => {
+        if (!uploadedFile) {
+            setError("Please upload a file to begin analysis.");
+            return;
+        }
+
+        setIsExtracting(true)
+        setError(null)
+        setAnalysisMode('smart')
+
+        try {
+            const formData = new window.FormData()
+            formData.append('file', uploadedFile)
+
+            const response = await fetch(`${BACKEND_URL}/analysis/extract-dimensions`, {
+                method: 'POST',
+                body: formData,
+            })
+
+            const contentType = response.headers.get('content-type')
+            if (!contentType || !contentType.includes('application/json')) {
+                throw new Error(`Server returned non-JSON response. Status: ${response.status}`)
+            }
+
+            const result = await response.json()
+
+            if (!response.ok || result.error) {
+                let errorMessage = result.message || result.error || 'Dimension extraction failed'
+                throw new Error(errorMessage)
+            }
+
+            // Show editable cabinet table
+            setExtractedCabinets(result.cabinets)
+        } catch (err: any) {
+            console.error('Extraction error:', err)
+            setError(err.message || 'Failed to extract dimensions')
+        } finally {
+            setIsExtracting(false)
+        }
+    }
+
+    // NEW SYSTEM - Calculate from confirmed cabinets
+    const handleCalculateCabinets = async (cabinets: Cabinet[]) => {
+        setIsAnalyzing(true)
+        setError(null)
+
+        try {
+            const response = await fetch(`${BACKEND_URL}/analysis/calculate-cabinets`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cabinets })
+            })
+
+            const contentType = response.headers.get('content-type')
+            if (!contentType || !contentType.includes('application/json')) {
+                throw new Error(`Server returned non-JSON response. Status: ${response.status}`)
+            }
+
+            const result = await response.json()
+
+            if (!response.ok || result.error) {
+                let errorMessage = result.message || result.error || 'Calculation failed'
+                throw new Error(errorMessage)
+            }
+
+            setAnalysisResults(result)
+            setExtractedCabinets(null) // Hide table, show results
+        } catch (err: any) {
+            console.error('Calculation error:', err)
+            setError(err.message || 'Failed to calculate components')
+        } finally {
+            setIsAnalyzing(false)
+        }
+    }
+
+    const handleCancelCabinetEdit = () => {
+        setExtractedCabinets(null)
+        setAnalysisMode(null)
     }
 
     return (
@@ -132,11 +210,11 @@ export default function AnalyzerPage() {
                     <div className="flex items-center space-x-3">
                         <div className="flex items-center space-x-2 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-md text-xs font-medium">
                             <Zap className="h-3.5 w-3.5" />
-                            <span>Google Cloud Vision</span>
+                            <span>Claude Sonnet 4</span>
                         </div>
                         <div className="flex items-center space-x-2 px-3 py-1.5 bg-green-50 text-green-700 rounded-md text-xs font-medium">
                             <CheckCircle className="h-3.5 w-3.5" />
-                            <span>GPT-4 Analysis</span>
+                            <span>Google Vision</span>
                         </div>
                     </div>
                 </div>
@@ -193,7 +271,7 @@ export default function AnalyzerPage() {
                 </Card>
 
                 {/* Upload Section - No file uploaded yet */}
-                {!uploadedFile && !isAnalyzing && !analysisResults && (
+                {!uploadedFile && !isAnalyzing && !isExtracting && !analysisResults && !extractedCabinets && (
                     <div className="space-y-6">
                         <Card className="bg-white border border-gray-200 shadow-sm">
                             <div className="p-8">
@@ -201,82 +279,72 @@ export default function AnalyzerPage() {
                             </div>
                         </Card>
 
-                        {/* Best Practices Card */}
-                        <Card className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 shadow-sm">
-                            <div className="p-6">
-                                <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
-                                    <CheckCircle className="h-5 w-5 text-blue-600 mr-2" />
-                                    Best Practices for Accurate Analysis
-                                </h3>
-                                <div className="grid md:grid-cols-2 gap-4">
-                                    <div className="space-y-2">
-                                        <h4 className="text-sm font-medium text-gray-800">✓ Good Quality Images</h4>
-                                        <ul className="space-y-1 text-xs text-gray-600">
-                                            <li>• Clear, high-resolution scans or photos</li>
-                                            <li>• All dimensions clearly visible</li>
-                                            <li>• Good lighting without shadows</li>
-                                            <li>• Straight orientation (not tilted)</li>
-                                        </ul>
-                                    </div>
-                                    <div className="space-y-2">
-                                        <h4 className="text-sm font-medium text-gray-800">✓ Technical Drawing Requirements</h4>
-                                        <ul className="space-y-1 text-xs text-gray-600">
-                                            <li>• Standard technical drawing format</li>
-                                            <li>• Measurements in mm or consistent units</li>
-                                            <li>• Cabinet views with dimensions labeled</li>
-                                            <li>• Legible text and numbers</li>
-                                        </ul>
-                                    </div>
-                                </div>
-                            </div>
-                        </Card>
-
-                        {/* Feature Cards */}
-                        <div className="grid md:grid-cols-3 gap-6">
-                            <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+                        {/* Analysis Mode Info Cards */}
+                        <div className="grid md:grid-cols-2 gap-6">
+                            <Card className="bg-gradient-to-br from-blue-50 to-blue-100 border border-blue-200 shadow-sm hover:shadow-md transition-shadow">
                                 <div className="p-6">
-                                    <div className="w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center mb-4">
-                                        <Upload className="h-6 w-6 text-blue-600" />
+                                    <div className="flex items-start space-x-3 mb-4">
+                                        <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                                            <Zap className="h-5 w-5 text-white" />
+                                        </div>
+                                        <div>
+                                            <h3 className="font-semibold text-gray-900 mb-1">Quick Analyze</h3>
+                                            <p className="text-xs text-gray-600">Best for single elevation cabinets</p>
+                                        </div>
                                     </div>
-                                    <h3 className="font-semibold text-gray-900 mb-2">Upload Drawing</h3>
-                                    <p className="text-sm text-gray-500">
-                                        Upload your kitchen cabinet technical drawing in any standard image format
-                                    </p>
+                                    <ul className="space-y-2 text-sm text-gray-700">
+                                        <li className="flex items-start">
+                                            <CheckCircle className="h-4 w-4 text-blue-600 mr-2 mt-0.5 flex-shrink-0" />
+                                            <span>Fast analysis (30 seconds)</span>
+                                        </li>
+                                        <li className="flex items-start">
+                                            <CheckCircle className="h-4 w-4 text-blue-600 mr-2 mt-0.5 flex-shrink-0" />
+                                            <span>Single cabinet drawings</span>
+                                        </li>
+                                        <li className="flex items-start">
+                                            <CheckCircle className="h-4 w-4 text-blue-600 mr-2 mt-0.5 flex-shrink-0" />
+                                            <span>4 component types</span>
+                                        </li>
+                                    </ul>
                                 </div>
                             </Card>
 
-                            <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+                            <Card className="bg-gradient-to-br from-purple-50 to-purple-100 border border-purple-200 shadow-sm hover:shadow-md transition-shadow">
                                 <div className="p-6">
-                                    <div className="w-12 h-12 bg-green-50 rounded-xl flex items-center justify-center mb-4">
-                                        <Settings className="h-6 w-6 text-green-600" />
+                                    <div className="flex items-start space-x-3 mb-4">
+                                        <div className="w-10 h-10 bg-purple-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                                            <Brain className="h-5 w-5 text-white" />
+                                        </div>
+                                        <div>
+                                            <h3 className="font-semibold text-gray-900 mb-1">Smart Analyze</h3>
+                                            <p className="text-xs text-gray-600">Best for full kitchen layouts</p>
+                                        </div>
                                     </div>
-                                    <h3 className="font-semibold text-gray-900 mb-2">Configure Settings</h3>
-                                    <p className="text-sm text-gray-500">
-                                        Customize workshop specifications for accurate cutting calculations
-                                    </p>
-                                </div>
-                            </Card>
-
-                            <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                                <div className="p-6">
-                                    <div className="w-12 h-12 bg-purple-50 rounded-xl flex items-center justify-center mb-4">
-                                        <FileText className="h-6 w-6 text-purple-600" />
-                                    </div>
-                                    <h3 className="font-semibold text-gray-900 mb-2">Get Results</h3>
-                                    <p className="text-sm text-gray-500">
-                                        Download professional cutting lists and DXF layouts instantly
-                                    </p>
+                                    <ul className="space-y-2 text-sm text-gray-700">
+                                        <li className="flex items-start">
+                                            <CheckCircle className="h-4 w-4 text-purple-600 mr-2 mt-0.5 flex-shrink-0" />
+                                            <span>Review & edit dimensions</span>
+                                        </li>
+                                        <li className="flex items-start">
+                                            <CheckCircle className="h-4 w-4 text-purple-600 mr-2 mt-0.5 flex-shrink-0" />
+                                            <span>Multiple cabinet layouts</span>
+                                        </li>
+                                        <li className="flex items-start">
+                                            <CheckCircle className="h-4 w-4 text-purple-600 mr-2 mt-0.5 flex-shrink-0" />
+                                            <span>7 component types (complete)</span>
+                                        </li>
+                                    </ul>
                                 </div>
                             </Card>
                         </div>
                     </div>
                 )}
 
-                {/* File Selected - Ready to Analyze */}
-                {uploadedFile && !isAnalyzing && !analysisResults && (
+                {/* File Selected - Choose Analysis Mode */}
+                {uploadedFile && !isAnalyzing && !isExtracting && !analysisResults && !extractedCabinets && (
                     <Card className="bg-white border border-gray-200 shadow-sm">
                         <div className="p-6">
-                            <div className="flex flex-col md:flex-row md:items-center md:justify-between space-y-4 md:space-y-0">
+                            <div className="flex flex-col space-y-6">
                                 <div className="flex items-center space-x-4">
                                     <div className="w-14 h-14 bg-blue-50 rounded-xl flex items-center justify-center">
                                         <FileImage className="h-7 w-7 text-blue-600" />
@@ -284,38 +352,90 @@ export default function AnalyzerPage() {
                                     <div>
                                         <h3 className="font-semibold text-gray-900">{uploadedFile.name}</h3>
                                         <p className="text-sm text-gray-500">
-                                            {(uploadedFile.size / (1024 * 1024)).toFixed(2)} MB • Ready to analyze
+                                            {(uploadedFile.size / (1024 * 1024)).toFixed(2)} MB • Choose analysis mode
                                         </p>
                                     </div>
                                 </div>
-                                <div className="flex space-x-3">
-                                    <Button 
-                                        onClick={resetAnalysis} 
-                                        variant="outline"
-                                        className="border-gray-300 text-gray-700 hover:bg-gray-50"
-                                    >
-                                        Cancel
-                                    </Button>
-                                    <Button 
-                                        onClick={handleAnalyze} 
-                                        className="bg-gray-900 text-white hover:bg-gray-800"
-                                    >
-                                        <Zap className="h-4 w-4 mr-2" />
-                                        Analyze Drawing
-                                    </Button>
+
+                                <div className="border-t border-gray-200 pt-6">
+                                    <h4 className="text-sm font-medium text-gray-900 mb-4">Select Analysis Mode:</h4>
+                                    <div className="grid md:grid-cols-2 gap-4">
+                                        {/* Quick Analyze Button */}
+                                        <Button 
+                                            onClick={handleQuickAnalyze}
+                                            className="h-auto py-4 px-6 bg-blue-600 hover:bg-blue-700 text-white flex-col items-start"
+                                        >
+                                            <div className="flex items-center space-x-2 mb-2">
+                                                <Zap className="h-5 w-5" />
+                                                <span className="font-semibold">Quick Analyze</span>
+                                            </div>
+                                            <span className="text-xs text-blue-100 text-left">
+                                                For single elevation cabinet drawings
+                                            </span>
+                                        </Button>
+
+                                        {/* Smart Analyze Button */}
+                                        <Button 
+                                            onClick={handleSmartAnalyze}
+                                            className="h-auto py-4 px-6 bg-purple-600 hover:bg-purple-700 text-white flex-col items-start"
+                                        >
+                                            <div className="flex items-center space-x-2 mb-2">
+                                                <Brain className="h-5 w-5" />
+                                                <span className="font-semibold">Smart Analyze</span>
+                                            </div>
+                                            <span className="text-xs text-purple-100 text-left">
+                                                For full kitchen layout drawings (recommended)
+                                            </span>
+                                        </Button>
+                                    </div>
+
+                                    <div className="mt-4 flex justify-center">
+                                        <Button 
+                                            onClick={resetAnalysis} 
+                                            variant="outline"
+                                            className="border-gray-300 text-gray-700 hover:bg-gray-50"
+                                        >
+                                            Cancel
+                                        </Button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
                     </Card>
                 )}
 
-                {/* Loading State */}
+                {/* Loading State - Extracting */}
+                {isExtracting && (
+                    <Card className="bg-white border border-gray-200 shadow-sm">
+                        <div className="p-12">
+                            <LoadingSpinner />
+                            <p className="text-center text-sm text-gray-600 mt-4">
+                                Extracting dimensions from drawing...
+                            </p>
+                        </div>
+                    </Card>
+                )}
+
+                {/* Loading State - Analyzing */}
                 {isAnalyzing && (
                     <Card className="bg-white border border-gray-200 shadow-sm">
                         <div className="p-12">
                             <LoadingSpinner />
+                            <p className="text-center text-sm text-gray-600 mt-4">
+                                {analysisMode === 'quick' ? 'Analyzing drawing...' : 'Calculating components...'}
+                            </p>
                         </div>
                     </Card>
+                )}
+
+                {/* Editable Cabinet Table (Smart Analyze - Phase 2) */}
+                {extractedCabinets && !analysisResults && (
+                    <EditableCabinetTable 
+                        initialCabinets={extractedCabinets}
+                        onCalculate={handleCalculateCabinets}
+                        onCancel={handleCancelCabinetEdit}
+                        isCalculating={isAnalyzing}
+                    />
                 )}
 
                 {/* Error State */}
@@ -332,7 +452,7 @@ export default function AnalyzerPage() {
                                         <p className="text-sm text-red-700 mb-4">{error}</p>
                                         <div className="flex space-x-3">
                                             <Button 
-                                                onClick={handleAnalyze} 
+                                                onClick={analysisMode === 'quick' ? handleQuickAnalyze : handleSmartAnalyze}
                                                 className="bg-red-600 text-white hover:bg-red-700"
                                             >
                                                 <RefreshCw className="h-4 w-4 mr-2" />
@@ -350,38 +470,6 @@ export default function AnalyzerPage() {
                                 </div>
                             </div>
                         </Card>
-
-                        {/* Troubleshooting Tips Card */}
-                        <Card className="bg-blue-50 border border-blue-200 shadow-sm">
-                            <div className="p-6">
-                                <h3 className="font-semibold text-blue-900 mb-3 flex items-center">
-                                    <AlertCircle className="h-5 w-5 mr-2" />
-                                    Troubleshooting Tips
-                                </h3>
-                                <ul className="space-y-2 text-sm text-blue-800">
-                                    <li className="flex items-start">
-                                        <span className="text-blue-600 mr-2">•</span>
-                                        <span>Ensure the drawing is clear and well-lit with visible dimensions</span>
-                                    </li>
-                                    <li className="flex items-start">
-                                        <span className="text-blue-600 mr-2">•</span>
-                                        <span>Check that all measurements and labels are legible</span>
-                                    </li>
-                                    <li className="flex items-start">
-                                        <span className="text-blue-600 mr-2">•</span>
-                                        <span>Verify your internet connection is stable</span>
-                                    </li>
-                                    <li className="flex items-start">
-                                        <span className="text-blue-600 mr-2">•</span>
-                                        <span>Try uploading the image again or use a higher quality scan</span>
-                                    </li>
-                                    <li className="flex items-start">
-                                        <span className="text-blue-600 mr-2">•</span>
-                                        <span>If the problem persists, contact support with the error message above</span>
-                                    </li>
-                                </ul>
-                            </div>
-                        </Card>
                     </div>
                 )}
 
@@ -397,7 +485,9 @@ export default function AnalyzerPage() {
                                         </div>
                                         <div>
                                             <h2 className="text-base font-semibold text-gray-900">Analysis Complete</h2>
-                                            <p className="text-sm text-gray-500">Your cutting list is ready</p>
+                                            <p className="text-sm text-gray-500">
+                                                {analysisMode === 'smart' ? 'Smart Analysis' : 'Quick Analysis'} • Your cutting list is ready
+                                            </p>
                                         </div>
                                     </div>
                                 </div>

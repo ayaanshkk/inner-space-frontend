@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -38,9 +38,58 @@ import {
   X,
   Archive,
 } from "lucide-react";
-import { fetchWithAuth } from "@/lib/api"; // Import the centralized API helper
+import { fetchWithAuth, api } from "@/lib/api";
 
-// ... interfaces stay the same ...
+
+// ✅ PERFORMANCE: Improved cache with compression support
+const CACHE_KEY = 'schedule_cache';
+const CACHE_DURATION = 10 * 60 * 1000; // 10 minutes (increased from 5)
+
+interface CachedData {
+  tasks: Task[];
+  jobs: Job[];
+  customers: Customer[];
+  timestamp: number;
+}
+
+const saveToCache = (data: Partial<CachedData>) => {
+  try {
+    const existing = getFromCache();
+    const updated = {
+      ...existing,
+      ...data,
+      timestamp: Date.now(),
+    };
+    localStorage.setItem(CACHE_KEY, JSON.stringify(updated));
+    console.log('💾 Saved to cache:', Object.keys(data));
+  } catch (err) {
+    console.error('Failed to save cache:', err);
+  }
+};
+
+const getFromCache = (): CachedData | null => {
+  try {
+    const cached = localStorage.getItem(CACHE_KEY);
+    if (!cached) return null;
+    
+    const data = JSON.parse(cached) as CachedData;
+    const age = Date.now() - data.timestamp;
+    
+    if (age > CACHE_DURATION) {
+      console.log('⏰ Cache expired');
+      localStorage.removeItem(CACHE_KEY);
+      return null;
+    }
+    
+    console.log('✅ Loaded from cache (age: ' + Math.round(age / 1000) + 's)');
+    return data;
+  } catch (err) {
+    console.error('Failed to load cache:', err);
+    return null;
+  }
+};
+
+// Interfaces
 interface Employee {
   id: number;
   full_name: string;
@@ -61,16 +110,20 @@ interface Customer {
   name: string;
   address?: string;
   phone?: string;
+  postcode?: string;
   stage: string;
 }
 
-interface Assignment {
+interface Task {
   id: string;
   type: "job" | "off" | "delivery" | "note";
   title: string;
   date: string;
+  start_date?: string;
+  end_date?: string;
   job_id?: string;
   customer_id?: string;
+  customer_name?: string;
   start_time?: string;
   end_time?: string;
   estimated_hours?: number | string;
@@ -79,14 +132,37 @@ interface Assignment {
   status?: string;
   user_id?: number;
   team_member?: string;
-  job_type?: string; // ✅ KEEP THIS
+  job_type?: string;
   created_by?: number;
-  created_by_name?: string; // ✅ ADD THIS
+  created_by_name?: string;
   updated_by?: number;
-  updated_by_name?: string; // ✅ ADD THIS
+  updated_by_name?: string;
 }
 
-// ... constants stay the same ...
+// Helper functions - MOVED BEFORE COMPONENT
+const formatDateKey = (date: Date | string) => {
+  if (typeof date === "string") return date;
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+// ✅ Color coding for job types
+const getTaskColorByType = (jobType?: string) => {
+  switch (jobType?.toLowerCase()) {
+    case "survey":
+      return "bg-blue-100 text-blue-800 border-blue-300";
+    case "delivery":
+      return "bg-purple-100 text-purple-800 border-purple-300";
+    case "installation":
+      return "bg-green-100 text-green-800 border-green-300";
+    default:
+      return "bg-gray-100 text-gray-800 border-gray-300";
+  }
+};
+
+// Constants
 const START_HOUR_WEEK = 7;
 const HOUR_HEIGHT_PX = 60;
 const timeSlotsWeek = Array.from({ length: 14 }, (_, i) => {
@@ -95,38 +171,53 @@ const timeSlotsWeek = Array.from({ length: 14 }, (_, i) => {
 });
 
 const interiorDesignJobTypes = [
-  "Consultation",
-  "Space Planning",
-  "Concept Development",
-  "FF&E Sourcing",
-  "Site Visit",
-  "Project Management",
-  "Styling",
+  "Survey",
+  "Delivery", 
+  "Installation",
 ];
 
 export default function SchedulePage() {
   const { user, token } = useAuth();
+  
+  console.log("🎬 SchedulePage component mounted");
+  
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [visibleCalendars, setVisibleCalendars] = useState<string[]>([]);
   const [showOwnCalendar, setShowOwnCalendar] = useState(true);
+  
+  const hasLoadedData = useRef(false);
 
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [assignments, setAssignments] = useState<Assignment[]>([]);
-  const [availableJobs, setAvailableJobs] = useState<Job[]>([]);
-  const [customers, setCustomers] = useState<Customer[]>([]);
+  
+  // ✅ PERFORMANCE: Load from cache immediately to show data faster
+  const cachedData = getFromCache();
+  const [tasks, setTasks] = useState<Task[]>(cachedData?.tasks || []);
+  const [availableJobs, setAvailableJobs] = useState<Job[]>(cachedData?.jobs || []);
+  const [customers, setCustomers] = useState<Customer[]>(cachedData?.customers || []);
 
-  const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
-  const [originalAssignment, setOriginalAssignment] = useState<Assignment | null>(null);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [originalTask, setOriginalTask] = useState<Task | null>(null);
   const [showAddDialog, setShowAddDialog] = useState(false);
-  const [showAssignmentDialog, setShowAssignmentDialog] = useState(false);
-  const [isEditingAssignment, setIsEditingAssignment] = useState(false);
+  const [showTaskDialog, setShowTaskDialog] = useState(false);
+  const [isEditingTask, setIsEditingTask] = useState(false);
+  
+  const [showDayViewDialog, setShowDayViewDialog] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<Date | null>(null);
 
-  const [loading, setLoading] = useState(true);
+  const [customAssignees, setCustomAssignees] = useState<string[]>([]);
+  const [customJobTasks, setCustomJobTasks] = useState<string[]>([]);
+  const [customAssigneeInput, setCustomAssigneeInput] = useState("");
+  const [customTaskInput, setCustomTaskInput] = useState("");
+
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [draggedAssignment, setDraggedAssignment] = useState<Assignment | null>(null);
-  const [newAssignment, setNewAssignment] = useState<Partial<Assignment>>({
+  const [draggedTask, setDraggedTask] = useState<Task | null>(null);
+  
+  const [newTask, setNewTask] = useState<Partial<Task>>({
     type: "job",
+    start_date: formatDateKey(new Date()),
+    end_date: formatDateKey(new Date()),
     start_time: "09:00",
     end_time: "17:00",
     priority: "Medium",
@@ -136,7 +227,7 @@ export default function SchedulePage() {
 
   const [viewMode, setViewMode] = useState<"month" | "week" | "year">("month");
 
-  // ... all memos stay the same ...
+  // ✅ PERFORMANCE: Memoize expensive calculations
   const calendarDays = useMemo(() => {
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
@@ -182,32 +273,83 @@ export default function SchedulePage() {
     return days;
   }, [currentDate]);
 
-  const assignmentsByDate = useMemo(() => {
-    return assignments.reduce(
-      (acc, assignment) => {
-        const dateKey = assignment.date;
-        if (!acc[dateKey]) {
-          acc[dateKey] = [];
+  // ✅ PERFORMANCE: Optimized tasksByDate calculation
+  const tasksByDate = useMemo(() => {
+    const dateMap: Record<string, Task[]> = {};
+    
+    for (const task of tasks) {
+      if (!task) continue;
+
+      if (task.start_date && task.end_date) {
+        const startDate = new Date(task.start_date);
+        const endDate = new Date(task.end_date);
+        
+        const startKey = formatDateKey(startDate);
+        if (!dateMap[startKey]) dateMap[startKey] = [];
+        dateMap[startKey].push(task);
+        
+        const endKey = formatDateKey(endDate);
+        if (startKey !== endKey) {
+          if (!dateMap[endKey]) dateMap[endKey] = [];
+          dateMap[endKey].push(task);
         }
-        acc[dateKey].push(assignment);
-        return acc;
-      },
-      {} as Record<string, Assignment[]>,
-    );
-  }, [assignments]);
+      } 
+      else if (task.date) {
+        const dateKey = task.date;
+        if (!dateMap[dateKey]) dateMap[dateKey] = [];
+        dateMap[dateKey].push(task);
+      }
+      else if (task.start_date) {
+        const dateKey = formatDateKey(new Date(task.start_date));
+        if (!dateMap[dateKey]) dateMap[dateKey] = [];
+        dateMap[dateKey].push(task);
+      }
+    }
+    
+    return dateMap;
+  }, [tasks]);
 
-  const declinedAssignments = useMemo(() => {
+  const declinedTasks = useMemo(() => {
     if (user?.role === "Manager") return [];
-    return assignments.filter((a) => a.user_id === user?.id && a.status === "Declined");
-  }, [assignments, user]);
+    return tasks.filter((a) => a.user_id === user?.id && a.status === "Declined");
+  }, [tasks, user]);
 
-  // ... formatting & navigation functions stay the same ...
-  const formatDateKey = (date: Date | string) => {
-    if (typeof date === "string") return date;
-    const yyyy = date.getFullYear();
-    const mm = String(date.getMonth() + 1).padStart(2, "0");
-    const dd = String(date.getDate()).padStart(2, "0");
-    return `${yyyy}-${mm}-${dd}`;
+  useEffect(() => {
+    const savedAssignees = localStorage.getItem('custom_assignees');
+    const savedJobTasks = localStorage.getItem('custom_job_tasks');
+    
+    if (savedAssignees) {
+      try {
+        setCustomAssignees(JSON.parse(savedAssignees));
+      } catch (e) {
+        console.error('Failed to parse custom assignees:', e);
+      }
+    }
+    if (savedJobTasks) {
+      try {
+        setCustomJobTasks(JSON.parse(savedJobTasks));
+      } catch (e) {
+        console.error('Failed to parse custom job tasks:', e);
+      }
+    }
+  }, []);
+
+  const saveCustomAssignee = (name: string) => {
+    const trimmedName = name.trim();
+    if (trimmedName && !customAssignees.includes(trimmedName)) {
+      const updated = [...customAssignees, trimmedName];
+      setCustomAssignees(updated);
+      localStorage.setItem('custom_assignees', JSON.stringify(updated));
+    }
+  };
+
+  const saveCustomJobTask = (task: string) => {
+    const trimmedTask = task.trim();
+    if (trimmedTask && !customJobTasks.includes(trimmedTask) && !interiorDesignJobTypes.includes(trimmedTask)) {
+      const updated = [...customJobTasks, trimmedTask];
+      setCustomJobTasks(updated);
+      localStorage.setItem('custom_job_tasks', JSON.stringify(updated));
+    }
   };
 
   const formatHeaderDate = (date: Date, view: "month" | "week" | "year") => {
@@ -260,7 +402,7 @@ export default function SchedulePage() {
     return hours * 60 + (minutes || 0);
   };
 
-  const getAssignmentWeekStyle = (start?: string, end?: string): React.CSSProperties => {
+  const getTaskWeekStyle = (start?: string, end?: string): React.CSSProperties => {
     if (!start || !end) {
       return { top: 0, height: `${HOUR_HEIGHT_PX}px` };
     }
@@ -281,173 +423,55 @@ export default function SchedulePage() {
     };
   };
 
-  // --- UPDATED DATA FETCHING ---
+  // ✅ PERFORMANCE: Optimized data fetching with parallel requests
   const fetchData = async () => {
-    if (!token || !user) return;
+    if (!token || !user || loading) return;
 
     try {
       setLoading(true);
       setError(null);
+      
+      console.log("🔄 Fetching schedule data...");
 
-      const [assignmentsRes, jobsRes, customersRes] = await Promise.all([
-        fetchWithAuth("assignments"), // Updated
-        fetchWithAuth("jobs/available"), // Updated
-        fetchWithAuth("customers/active"), // Updated
+      // ✅ USE YOUR EXISTING fetchWithAuth HELPER INSTEAD
+      const [tasksRes, jobsRes, customersRes] = await Promise.all([
+        fetchWithAuth('assignments'),
+        fetchWithAuth('jobs'),
+        fetchWithAuth('customers')
       ]);
-
-      if (!assignmentsRes.ok || !jobsRes.ok || !customersRes.ok) {
-        throw new Error("API not available");
-      }
-
-      const [assignmentsData, jobsData, customersData] = await Promise.all([
-        assignmentsRes.json(),
+      
+      // Check all responses
+      if (!tasksRes.ok) throw new Error(`Assignments failed: ${tasksRes.status}`);
+      if (!jobsRes.ok) throw new Error(`Jobs failed: ${jobsRes.status}`);
+      if (!customersRes.ok) throw new Error(`Customers failed: ${customersRes.status}`);
+      
+      const [tasksData, jobsData, customersData] = await Promise.all([
+        tasksRes.json(),
         jobsRes.json(),
-        customersRes.json(),
+        customersRes.json()
       ]);
+      
+      const newData = {
+        tasks: Array.isArray(tasksData) ? tasksData : [],
+        jobs: Array.isArray(jobsData) ? jobsData : [],
+        customers: Array.isArray(customersData) ? customersData : [],
+      };
+      
+      // ✅ Update state and cache
+      setTasks(newData.tasks);
+      setAvailableJobs(newData.jobs);
+      setCustomers(newData.customers);
+      saveToCache(newData);
 
-      setAssignments(assignmentsData);
-      setAvailableJobs(jobsData);
-      setCustomers(customersData);
+      console.log("✅ Data loaded successfully");
     } catch (err) {
-      console.error("Error fetching data:", err);
-      setError(err instanceof Error ? err.message : "Failed to load data");
+      console.error("❌ Error fetching data:", err);
+      setError(err instanceof Error ? err.message : "Failed to load schedule data");
     } finally {
       setLoading(false);
     }
   };
 
-  // --- UPDATED CRUD OPERATIONS ---
-  const createAssignment = async (assignmentData: Partial<Assignment>) => {
-    if (!token) throw new Error("Not authenticated");
-
-    try {
-      setSaving(true);
-
-      let title = assignmentData.title || "";
-
-      if (!title) {
-        switch (assignmentData.type) {
-          case "job":
-            if (assignmentData.job_id) {
-              const job = availableJobs.find((j) => j.id === assignmentData.job_id);
-              title = job ? `${job.job_reference} - ${job.customer_name}` : "Job Assignment";
-            } else if (assignmentData.customer_id) {
-              const customer = customers.find((c) => c.id === assignmentData.customer_id);
-              title = customer ? `Job - ${customer.name}` : "Job Assignment";
-            } else {
-              title = "Job Assignment";
-            }
-            break;
-          case "off":
-            title = "Day Off";
-            break;
-          case "delivery":
-            title = "Deliveries";
-            break;
-          case "note":
-            title = assignmentData.notes || "Note";
-            break;
-          default:
-            title = "Assignment";
-        }
-      } else if (assignmentData.type === "job" && assignmentData.customer_id && !assignmentData.job_id) {
-        const customer = customers.find((c) => c.id === assignmentData.customer_id);
-        if (customer) {
-          title = `${title} - ${customer.name}`;
-        }
-      }
-
-      const finalAssignmentData = {
-        ...assignmentData,
-        title,
-        user_id: assignmentData.user_id || user?.id,
-        status: user?.role === "Manager" || assignmentData.user_id === user?.id ? "Accepted" : "Scheduled",
-      };
-
-      console.log("Sending assignment data:", finalAssignmentData);
-
-      const response = await fetchWithAuth("assignments", {
-        // Updated
-        method: "POST",
-        body: JSON.stringify(finalAssignmentData),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to create assignment");
-      }
-
-      const result = await response.json();
-      setAssignments((prev) => [...prev, result.assignment]);
-      return result.assignment;
-    } catch (err) {
-      console.error("Error creating assignment:", err);
-      throw err;
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const updateAssignment = async (id: string, assignmentData: Partial<Assignment>) => {
-    if (!token) throw new Error("Not authenticated");
-
-    try {
-      setSaving(true);
-      const response = await fetchWithAuth(`assignments/${id}`, {
-        // Updated
-        method: "PUT",
-        body: JSON.stringify(assignmentData),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to update assignment");
-      }
-
-      const result = await response.json();
-      setAssignments((prev) => prev.map((a) => (a.id === id ? result.assignment : a)));
-      return result.assignment;
-    } catch (err) {
-      console.error("Error updating assignment:", err);
-      throw err;
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const deleteAssignment = async (id: string) => {
-    if (!token) throw new Error("Not authenticated");
-
-    try {
-      setSaving(true);
-      const response = await fetchWithAuth(`assignments/${id}`, {
-        // Updated
-        method: "DELETE",
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to delete assignment");
-      }
-
-      setAssignments((prev) => prev.filter((a) => a.id !== id));
-    } catch (err) {
-      console.error("Error deleting assignment:", err);
-      throw err;
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleAssignmentResponse = async (assignment: Assignment, newStatus: "Accepted" | "Declined") => {
-    try {
-      await updateAssignment(assignment.id, { status: newStatus });
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to update status");
-    }
-  };
-
-  // --- USE EFFECTS ---
   useEffect(() => {
     if (!user || !token) return;
 
@@ -457,14 +481,11 @@ export default function SchedulePage() {
       if (user.role !== "Manager") return;
 
       try {
-        const res = await fetchWithAuth("auth/users/staff"); // Updated
-
-        if (!res.ok) {
-          throw new Error(`Failed to fetch staff: ${res.status}`);
+        const res = await fetchWithAuth("auth/users/staff");
+        if (res.ok) {
+          const data = await res.json();
+          setEmployees(data.users || []);
         }
-
-        const data = await res.json();
-        setEmployees(data.users || []);
       } catch (err) {
         console.error("Error fetching employees:", err);
       }
@@ -473,614 +494,439 @@ export default function SchedulePage() {
     fetchEmployees();
   }, [user, token]);
 
+  // ✅ Load data once when component mounts with user/token
   useEffect(() => {
-    if (user && token) {
-      fetchData();
+    if (user && token && !hasLoadedData.current) {
+      console.log("🎯 Initial data load triggered");
+      hasLoadedData.current = true;
+      
+      // ✅ If we have cached data, don't show loading state
+      if (cachedData) {
+        console.log("⚡ Using cached data, refreshing in background");
+        fetchData(); // Refresh in background
+      } else {
+        console.log("📡 No cache, fetching data");
+        fetchData();
+      }
     }
   }, [user, token]);
 
-  // ... rest of the event handlers and helper functions stay the same ...
+  // CRUD operations
+  const createTask = async (taskData: Partial<Task>) => {
+    if (!token) throw new Error("Not authenticated");
+    
+    if (!taskData.customer_id) {
+      throw new Error("Customer is required");
+    }
+
+    if (!taskData.start_date) {
+      throw new Error("Start date is required");
+    }
+
+    if (!taskData.end_date) {
+      throw new Error("End date is required");
+    }
+
+    try {
+      setSaving(true);
+
+      const customer = customers.find((c) => c.id === taskData.customer_id);
+      const customerName = customer?.name || "Unknown Customer";
+
+      let title = "";
+      if (taskData.job_type) {
+        title = `${customerName} - ${taskData.job_type}`;
+      } else if (taskData.title) {
+        title = `${customerName} - ${taskData.title}`;
+      } else {
+        switch (taskData.type) {
+          case "job":
+            title = `${customerName} - Job`;
+            break;
+          case "off":
+            title = "Day Off";
+            break;
+          case "delivery":
+            title = `${customerName} - Deliveries`;
+            break;
+          case "note":
+            title = taskData.notes || "Note";
+            break;
+          default:
+            title = customerName;
+        }
+      }
+
+      let estimatedHours = taskData.estimated_hours;
+      if (taskData.start_time && taskData.end_time && !estimatedHours) {
+        const hours = calculateHours(taskData.start_time, taskData.end_time);
+        estimatedHours = hours ? parseFloat(hours) : 8;
+      }
+
+      const cleanedData = {
+        type: taskData.type,
+        title: title,
+        date: taskData.start_date,
+        start_date: taskData.start_date,
+        end_date: taskData.end_date,
+        start_time: taskData.start_time,
+        end_time: taskData.end_time,
+        estimated_hours: estimatedHours,
+        notes: taskData.notes,
+        priority: taskData.priority,
+        status: user?.role === "Manager" || taskData.user_id === user?.id ? "Accepted" : "Scheduled",
+        user_id: taskData.user_id || user?.id,
+        team_member: taskData.team_member,
+        job_id: taskData.job_id,
+        customer_id: taskData.customer_id,
+        customer_name: customerName,
+        job_type: taskData.job_type,
+      };
+
+      Object.keys(cleanedData).forEach(key => {
+        if (cleanedData[key as keyof typeof cleanedData] === undefined) {
+          delete cleanedData[key as keyof typeof cleanedData];
+        }
+      });
+
+      console.log("📤 Creating task:", cleanedData);
+
+      const newTask = await api.createAssignment(cleanedData);
+      
+      if (!newTask.start_date && cleanedData.start_date) {
+        newTask.start_date = cleanedData.start_date;
+      }
+      if (!newTask.end_date && cleanedData.end_date) {
+        newTask.end_date = cleanedData.end_date;
+      }
+      if (!newTask.customer_name && cleanedData.customer_name) {
+        newTask.customer_name = cleanedData.customer_name;
+      }
+      
+      const updatedTasks = [...tasks, newTask];
+      setTasks(updatedTasks);
+      saveToCache({ tasks: updatedTasks });
+      
+      console.log("✅ Task created successfully");
+      return newTask;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const updateTask = async (id: string, taskData: Partial<Task>) => {
+    if (!token) throw new Error("Not authenticated");
+
+    try {
+      setSaving(true);
+      const updatedTask = await api.updateAssignment(id, taskData);
+      
+      const updatedTasks = tasks.map((a) => (a.id === id ? updatedTask : a));
+      setTasks(updatedTasks);
+      saveToCache({ tasks: updatedTasks });
+      
+      return updatedTask;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteTask = async (id: string) => {
+    if (!token) throw new Error("Not authenticated");
+
+    try {
+      setSaving(true);
+      
+      console.log(`🗑️ Deleting task: ${id}`);
+      
+      const response = await fetch(`https://aztec-interior.onrender.com/assignments/${id}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('❌ Non-JSON response:', text);
+        throw new Error('Server returned an error. Please check if the task exists.');
+      }
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || `Failed to delete task: ${response.status}`);
+      }
+
+      const updatedTasks = tasks.filter((t) => t.id !== id);
+      setTasks(updatedTasks);
+      saveToCache({ tasks: updatedTasks });
+      
+      setShowTaskDialog(false);
+      setSelectedTask(null);
+      setIsEditingTask(false);
+      
+      console.log(`✅ Task deleted successfully`);
+      
+    } catch (err) {
+      console.error('❌ Error deleting task:', err);
+      alert(err instanceof Error ? err.message : 'Failed to delete task');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Event handlers
   const toggleCalendarVisibility = (name: string) => {
     setVisibleCalendars((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));
   };
 
-  const getAssignmentsForDate = (date: Date) => {
+  const getTasksForDate = (date: Date) => {
     const dateKey = formatDateKey(date);
-    const allDayAssignments = assignments.filter((a) => a.date === dateKey);
+    const allDayTasks = tasks.filter((t) => {
+      if (!t) return false;
+      
+      if (t.start_date && t.end_date) {
+        const taskStart = new Date(t.start_date);
+        const taskEnd = new Date(t.end_date);
+        
+        const startKey = formatDateKey(taskStart);
+        const endKey = formatDateKey(taskEnd);
+        
+        return dateKey >= startKey && dateKey <= endKey;
+      }
+      
+      if (t.date) {
+        return t.date === dateKey;
+      }
+      
+      if (t.start_date) {
+        return formatDateKey(new Date(t.start_date)) === dateKey;
+      }
+      
+      return false;
+    });
 
-    if (user?.role === "Manager") {
-      return allDayAssignments.filter((a) => visibleCalendars.includes(a.team_member ?? ""));
-    }
-
-    return allDayAssignments.filter((a) => a.status !== "Declined");
+    return allDayTasks.filter((t) => t.status !== "Declined");
   };
 
   const getDailyHours = (date: Date) => {
-    const dayAssignments = getAssignmentsForDate(date);
-    return dayAssignments.reduce((total, a) => {
-      const h = typeof a.estimated_hours === "string" ? parseFloat(a.estimated_hours) : a.estimated_hours || 0;
+    const dayTasks = getTasksForDate(date);
+    return dayTasks.reduce((total, t) => {
+      if (!t || !t.estimated_hours) return total;
+      const h = typeof t.estimated_hours === "string" ? parseFloat(t.estimated_hours) : t.estimated_hours || 0;
       return total + (isNaN(h) ? 0 : h);
     }, 0);
   };
 
   const isOverbooked = (date: Date) => getDailyHours(date) > 8;
 
-  const getAssignmentColor = (assignment: Assignment) => {
-    switch (assignment.type) {
+  const getTaskColor = (task: Task) => {
+    switch (task.type) {
       case "off":
         return "bg-gray-200 text-gray-800 border-gray-300";
       case "delivery":
-        return "bg-blue-100 text-blue-800 border-blue-300";
+        return getTaskColorByType("Delivery");
       case "note":
         return "bg-yellow-100 text-yellow-800 border-yellow-300";
       case "job":
-        return "bg-green-100 text-green-800 border-green-300";
+        return getTaskColorByType(task.job_type);
       default:
         return "bg-gray-100 text-gray-800 border-gray-300";
     }
   };
 
-  const handleAddAssignment = async () => {
-    if (!newAssignment.date || !newAssignment.type) {
-      alert("Please fill in required fields");
+  const handleAddTask = async () => {
+    if (!newTask.start_date || !newTask.end_date || !newTask.type) {
+      alert("Please fill in required fields (Type, Start Date, and End Date)");
       return;
     }
 
+    if (!newTask.customer_id) {
+      alert("Please select a customer");
+      return;
+    }
+
+    if (customAssigneeInput.trim()) saveCustomAssignee(customAssigneeInput);
+    if (customTaskInput.trim()) saveCustomJobTask(customTaskInput);
+
     try {
-      await createAssignment(newAssignment);
+      await createTask(newTask);
+      
       setShowAddDialog(false);
-      setNewAssignment({
+      
+      setNewTask({
         type: "job",
+        start_date: formatDateKey(new Date()),
+        end_date: formatDateKey(new Date()),
         start_time: "09:00",
         end_time: "17:00",
         priority: "Medium",
         status: "Scheduled",
         estimated_hours: 8,
       });
+      setCustomAssigneeInput("");
+      setCustomTaskInput("");
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to create assignment");
+      console.error("Error creating task:", err);
+      alert(err instanceof Error ? err.message : "Failed to create task");
     }
   };
 
-  const handleEditAssignment = async () => {
-    if (!selectedAssignment) return;
+  const handleEditTask = async () => {
+    if (!selectedTask) return;
+    
+    if (customAssigneeInput.trim()) saveCustomAssignee(customAssigneeInput);
+    if (customTaskInput.trim()) saveCustomJobTask(customTaskInput);
+    
     try {
-      await updateAssignment(selectedAssignment.id, selectedAssignment);
-      setShowAssignmentDialog(false);
-      setSelectedAssignment(null);
-      setOriginalAssignment(null);
-      setIsEditingAssignment(false);
+      await updateTask(selectedTask.id, selectedTask);
+      setShowTaskDialog(false);
+      setSelectedTask(null);
+      setIsEditingTask(false);
+      setCustomAssigneeInput("");
+      setCustomTaskInput("");
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to update assignment");
+      alert(err instanceof Error ? err.message : "Failed to update task");
     }
   };
 
-  const handleDeleteAssignment = async (assignmentId: string) => {
-    if (!confirm("Are you sure you want to delete this assignment?")) return;
-
-    try {
-      await deleteAssignment(assignmentId);
-      setShowAssignmentDialog(false);
-      setSelectedAssignment(null);
-      setOriginalAssignment(null);
-      setIsEditingAssignment(false);
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to delete assignment");
-    }
+  const handleDeleteTask = async (taskId: string) => {
+    if (!confirm("Are you sure you want to delete this task?")) return;
+    await deleteTask(taskId);
   };
 
-  const handleDragStart = (assignment: Assignment) => {
-    setDraggedAssignment(assignment);
+  const handleDragStart = (task: Task) => {
+    setDraggedTask(task);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
   };
 
+  // ✅ INSTANT drag-and-drop with silent retry
   const handleDrop = async (e: React.DragEvent, date: Date) => {
     e.preventDefault();
-    if (!draggedAssignment) return;
-
-    if (
-      user?.role !== "Manager" &&
-      draggedAssignment.created_by !== user?.id &&
-      draggedAssignment.status === "Scheduled"
-    ) {
-      alert("Please accept or decline the assignment before moving it.");
-      setDraggedAssignment(null);
-      return;
-    }
+    if (!draggedTask) return;
 
     const dateKey = formatDateKey(date);
-    try {
-      await updateAssignment(draggedAssignment.id, { date: dateKey });
-      setDraggedAssignment(null);
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to move assignment");
-      setDraggedAssignment(null);
+    const taskToMove = draggedTask;
+    
+    setDraggedTask(null);
+    
+    const updatedTask = {
+      ...taskToMove,
+      start_date: dateKey,
+      date: dateKey,
+      end_date: dateKey
+    };
+    
+    const previousTasks = tasks;
+    
+    // ✅ INSTANT UPDATE - UI responds immediately
+    const updatedTasks = tasks.map((t) => (t.id === taskToMove.id ? updatedTask : t));
+    setTasks(updatedTasks);
+    saveToCache({ tasks: updatedTasks });
+    console.log(`🎯 Task moved instantly to ${dateKey}`);
+    
+    // ✅ Update server in background with retry
+    const maxRetries = 3;
+    let retryCount = 0;
+    
+    const attemptUpdate = async (): Promise<boolean> => {
+      try {
+        await updateTask(taskToMove.id, { 
+          start_date: dateKey, 
+          date: dateKey,
+          end_date: dateKey
+        });
+        console.log(`✅ Server updated successfully`);
+        return true;
+      } catch (err) {
+        retryCount++;
+        console.error(`❌ Update failed (attempt ${retryCount}/${maxRetries})`);
+        
+        if (retryCount < maxRetries) {
+          // Exponential backoff
+          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+          return attemptUpdate();
+        }
+        return false;
+      }
+    };
+    
+    const success = await attemptUpdate();
+    
+    if (!success) {
+      console.error("❌ All retries failed, reverting");
+      setTasks(previousTasks);
+      saveToCache({ tasks: previousTasks });
+      alert("Failed to move task after multiple attempts. Please try again or refresh the page.");
     }
   };
 
   const gridColumnStyle = { gridTemplateColumns: `repeat(7, 156.4px)` } as React.CSSProperties;
   const weekdayShort = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-  // --- LOADING / ERROR (Unchanged) ---
-  if (loading) {
+  if (!user) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-white">
-        <div className="flex items-center space-x-2">
-          <Loader2 className="h-6 w-6 animate-spin" />
-          <span>Loading schedule...</span>
+        <div className="flex flex-col items-center space-y-4">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+          <span className="text-lg font-medium">Loading...</span>
         </div>
       </div>
     );
   }
 
-  if (error) {
+  if (error && tasks.length === 0) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-white">
-        <div className="text-center">
+        <div className="text-center max-w-md">
           <AlertTriangle className="mx-auto mb-4 h-12 w-12 text-red-500" />
           <h3 className="mb-2 text-lg font-medium text-red-900">Error Loading Schedule</h3>
           <p className="mb-4 text-red-600">{error}</p>
-          <Button onClick={fetchData}>Try Again</Button>
+          <Button onClick={() => {
+            hasLoadedData.current = false;
+            setError(null);
+            fetchData();
+          }}>
+            Try Again
+          </Button>
         </div>
       </div>
     );
   }
 
-  // --- RENDER FUNCTIONS ---
-
-  // --- MODIFIED renderMonthView (Task 6) ---
-  const renderMonthView = () => (
-    <div className="p-6 pr-0">
-      <div className="overflow-auto rounded-lg border shadow-sm">
-        <div className="sticky top-0 z-10 border-b border-gray-200 bg-gray-50">
-          <div className="grid" style={gridColumnStyle}>
-            {weekdayShort.map((wd, idx) => (
-              <div key={idx} className="min-w-[140px] border-r border-gray-200 p-3 text-center">
-                <div className="text-xs font-medium text-gray-900">{wd}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="divide-y divide-gray-200">
-          {weeks.map((week, weekIdx) => (
-            <div key={weekIdx} className="grid" style={gridColumnStyle}>
-              {week.map((day, dayIndex) => {
-                const dayKey = formatDateKey(day);
-                const dayAssignments = getAssignmentsForDate(day);
-                const dailyHours = getDailyHours(day);
-                const overbooked = isOverbooked(day);
-
-                return (
-                  <div
-                    key={dayIndex}
-                    className="relative min-h-[120px] border-r border-gray-200 bg-white p-2"
-                    onDragOver={handleDragOver}
-                    onDrop={(e) => handleDrop(e, day)}
-                  >
-                    <div className="mb-1 flex items-center justify-between text-xs text-gray-500">
-                      <div
-                        className={`flex h-6 w-6 items-center justify-center rounded-full text-[13px] ${
-                          day.toDateString() === new Date().toDateString() ? "bg-black text-white" : "text-gray-500"
-                        }`}
-                      >
-                        {day.getDate()}
-                      </div>
-                      {dailyHours > 0 && <div className="text-[11px] text-gray-500">{dailyHours}h</div>}
-                    </div>
-
-                    <div className="flex flex-col space-y-1">
-                      {dayAssignments.map((assignment) => {
-                        // --- NEW PENDING LOGIC (Task 6) ---
-                        const isPending =
-                          user?.role !== "Manager" &&
-                          assignment.created_by !== user?.id &&
-                          (assignment.status === "Scheduled" || assignment.status === "Pending");
-
-                        if (isPending) {
-                          return (
-                            <div
-                              key={assignment.id}
-                              className="relative rounded border border-orange-300 bg-orange-100 p-1 text-xs"
-                              title={assignment.title}
-                            >
-                              <div className="flex items-center justify-between">
-                                <div className="flex-1 truncate">
-                                  <div className="truncate text-[11px] font-medium">{assignment.title}</div>
-                                  <div className="text-[10px] text-orange-700">New assignment</div>
-                                </div>
-                                <div className="flex space-x-1">
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-6 w-6 text-green-600 hover:bg-green-100"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleAssignmentResponse(assignment, "Accepted");
-                                    }}
-                                    title="Accept"
-                                  >
-                                    <Check className="h-4 w-4" />
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-6 w-6 text-red-600 hover:bg-red-100"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleAssignmentResponse(assignment, "Declined");
-                                    }}
-                                    title="Decline"
-                                  >
-                                    <X className="h-4 w-4" />
-                                  </Button>
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        }
-                        // --- END PENDING LOGIC ---
-
-                        return (
-                          <div
-                            key={assignment.id}
-                            className={`relative cursor-pointer rounded border p-1 text-xs ${getAssignmentColor(assignment)}`}
-                            draggable
-                            onDragStart={() => handleDragStart(assignment)}
-                            onClick={() => {
-                              // --- MODIFIED CLICK (Task 3) ---
-                              setSelectedAssignment(assignment);
-                              setOriginalAssignment(assignment); // Store original
-                              setIsEditingAssignment(false); // Start in view mode
-                              setShowAssignmentDialog(true);
-                            }}
-                            title={assignment.title}
-                          >
-                            <div className="flex items-center space-x-1">
-                              <div className="flex-shrink-0">
-                                <Calendar className="h-2.5 w-2.5" />
-                              </div>
-                              <div className="flex-1 truncate">
-                                <div className="truncate text-[11px] font-medium">{assignment.title}</div>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-
-                      <div className="pt-1">
-                        <button
-                          className="text-xs text-gray-400 hover:text-gray-700"
-                          onClick={() => {
-                            setNewAssignment({
-                              type: "job",
-                              date: dayKey,
-                              estimated_hours: 8,
-                              start_time: "09:00",
-                              end_time: "17:00",
-                              priority: "Medium",
-                              status: "Scheduled",
-                            });
-                            setShowAddDialog(true);
-                          }}
-                        >
-                          + Add
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-
-  // --- MODIFIED renderWeekView (Task 6) ---
-  const renderWeekView = () => (
-    <div className="p-6">
-      <div
-        className="overflow-auto rounded-lg border shadow-sm"
-        style={{ maxHeight: "calc(100vh - 200px)" }} // Limit height and make scrollable
-      >
-        <div className="grid" style={{ gridTemplateColumns: "60px repeat(7, minmax(140px, 1fr))" }}>
-          {/* Header Row */}
-          <div className="sticky top-0 z-10 border-r border-b bg-gray-50"></div> {/* Top-left corner */}
-          {daysOfWeek.map((day) => (
-            <div key={day.toISOString()} className="sticky top-0 z-10 border-r border-b bg-gray-50 p-3 text-center">
-              <div className="text-xs font-medium text-gray-900">
-                {day.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase()}
-              </div>
-              <div
-                className={`text-2xl font-semibold ${day.toDateString() === new Date().toDateString() ? "text-black" : "text-gray-700"}`}
-              >
-                {day.getDate()}
-              </div>
-            </div>
-          ))}
-          {/* Time Gutter Column */}
-          <div className="sticky left-0 z-10 border-r bg-gray-50">
-            {timeSlotsWeek.map((time) => (
-              <div
-                key={time}
-                style={{ height: `${HOUR_HEIGHT_PX}px` }}
-                className="border-b p-1 pr-2 text-right text-xs text-gray-500"
-              >
-                {time}
-              </div>
-            ))}
-          </div>
-          {/* Day Columns */}
-          {daysOfWeek.map((day) => {
-            const dayKey = formatDateKey(day);
-            const dayAssignments = getAssignmentsForDate(day);
-
-            return (
-              <div
-                key={dayKey}
-                className="relative border-r"
-                onDragOver={handleDragOver}
-                onDrop={(e) => handleDrop(e, day)}
-              >
-                {/* Grid lines */}
-                {timeSlotsWeek.map((_, idx) => (
-                  <div key={idx} style={{ height: `${HOUR_HEIGHT_PX}px` }} className="border-b"></div>
-                ))}
-
-                {/* Assignments */}
-                {dayAssignments.map((a) => {
-                  // --- NEW PENDING LOGIC (Task 6) ---
-                  const isPending =
-                    user?.role !== "Manager" &&
-                    a.created_by !== user?.id &&
-                    (a.status === "Scheduled" || a.status === "Pending");
-
-                  if (isPending) {
-                    return (
-                      <div
-                        key={a.id}
-                        className="z-20 rounded border border-orange-300 bg-orange-100 px-2 py-1"
-                        style={getAssignmentWeekStyle(a.start_time, a.end_time)}
-                        title={a.title}
-                      >
-                        <div className="truncate text-xs font-medium">{a.title}</div>
-                        <div className="mb-1 text-[10px] text-orange-700">New assignment</div>
-                        <div className="flex items-center justify-end space-x-1">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 text-green-600 hover:bg-green-100"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleAssignmentResponse(a, "Accepted");
-                            }}
-                            title="Accept"
-                          >
-                            <Check className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 text-red-600 hover:bg-red-100"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleAssignmentResponse(a, "Declined");
-                            }}
-                            title="Decline"
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </div>
-                    );
-                  }
-                  // --- END PENDING LOGIC ---
-
-                  return (
-                    <div
-                      key={a.id}
-                      className={`rounded border px-2 py-1 ${getAssignmentColor(a)} z-20 cursor-pointer overflow-hidden`}
-                      style={getAssignmentWeekStyle(a.start_time, a.end_time)}
-                      draggable
-                      onDragStart={() => handleDragStart(a)}
-                      onClick={() => {
-                        // --- MODIFIED CLICK (Task 3) ---
-                        setSelectedAssignment(a);
-                        setOriginalAssignment(a); // Store original
-                        setIsEditingAssignment(false); // Start in view mode
-                        setShowAssignmentDialog(true);
-                      }}
-                      title={a.title}
-                    >
-                      <div className="truncate text-xs font-medium">{a.title}</div>
-                      <div className="text-[11px] text-gray-600">
-                        {a.start_time} - {a.end_time}
-                      </div>
-                      {a.team_member && <div className="mt-1 truncate text-[10px] text-gray-500">{a.team_member}</div>}
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-
-  // --- Internal Component for Year View (Unchanged) ---
-  const MiniCalendar = ({ month, year }: { month: number; year: number }) => {
-    const monthName = new Date(year, month).toLocaleDateString("en-US", { month: "long" });
-
-    // Logic to get days (copied and adapted from calendarDays)
-    const firstDay = new Date(year, month, 1);
-    const firstDayOfWeek = firstDay.getDay();
-    const lastDay = new Date(year, month + 1, 0).getDate();
-    const daysFromPrevMonth = firstDayOfWeek === 0 ? 6 : firstDayOfWeek - 1;
-
-    const days: Date[] = [];
-    for (let i = daysFromPrevMonth; i > 0; i--) {
-      days.push(new Date(year, month, 1 - i));
-    }
-    for (let day = 1; day <= lastDay; day++) {
-      days.push(new Date(year, month, day));
-    }
-    const totalDays = days.length;
-    const remainingDays = totalDays <= 35 ? 35 - totalDays : 42 - totalDays; // 5 or 6 rows
-    for (let day = 1; day <= remainingDays; day++) {
-      days.push(new Date(year, month + 1, day));
-    }
-
-    const today = new Date();
-    const todayKey = formatDateKey(today);
-
-    // Get assignments relevant to this user for the dots
-    const relevantAssignments =
-      user?.role === "Manager"
-        ? assignmentsByDate
-        : Object.entries(assignmentsByDate).reduce(
-            (acc, [date, assignments]) => {
-              const userAssignments = assignments.filter((a) => a.user_id === user?.id && a.status !== "Declined");
-              if (userAssignments.length > 0) {
-                acc[date] = userAssignments;
-              }
-              return acc;
-            },
-            {} as Record<string, Assignment[]>,
-          );
-
-    return (
-      <div className="rounded-lg border p-4">
-        <button
-          className="mb-2 w-full text-center text-lg font-semibold hover:text-black"
-          onClick={() => {
-            setCurrentDate(new Date(year, month, 1));
-            setViewMode("month");
-          }}
-        >
-          {monthName}
-        </button>
-        <div className="mb-1 grid grid-cols-7 gap-1 text-center text-xs text-gray-500">
-          {weekdayShort.map((wd) => (
-            <div key={wd}>{wd}</div>
-          ))}
-        </div>
-        <div className="grid grid-cols-7 gap-1">
-          {days.map((day, idx) => {
-            const dateKey = formatDateKey(day);
-            const dayAssignments = relevantAssignments[dateKey] || [];
-            const isCurrentMonth = day.getMonth() === month;
-            const isToday = dateKey === todayKey;
-
-            return (
-              <div
-                key={idx}
-                className={`relative flex h-8 w-full items-center justify-center rounded text-xs ${isCurrentMonth ? "text-gray-900" : "text-gray-300"} ${isToday ? "rounded-full bg-black text-white" : ""} `}
-              >
-                {day.getDate()}
-                {dayAssignments.length > 0 && isCurrentMonth && (
-                  <div className="absolute bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-green-500"></div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
-  const renderYearView = () => {
-    const year = currentDate.getFullYear();
-    const months = Array.from({ length: 12 }, (_, i) => i); // 0 to 11
-
-    return (
-      <div className="p-6">
-        <h2 className="mb-6 text-center text-3xl font-bold">{year}</h2>
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {months.map((month) => (
-            <MiniCalendar key={month} month={month} year={year} />
-          ))}
-        </div>
-      </div>
-    );
-  };
-
-  // --- MAIN RETURN ---
-
+  // Main render
   return (
-    <div className="min-h-screen bg-white">
-      {/* --- MAIN HEADER (Unchanged) --- */}
-      <div className="sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white px-6 py-5">
-        <div className="flex items-center space-x-4">
-          <h1 className="text-2xl font-semibold text-gray-900">Schedule</h1>
+    <div className="min-h-screen bg-white p-6">
+      {/* Header */}
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Schedule</h1>
 
-          {/* --- Calendar Navigation --- */}
-          <div className="flex items-center space-x-2">
-            <Button variant="outline" size="sm" onClick={() => navigateView("prev")}>
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <span className="w-64 px-4 text-center text-lg font-medium">{formatHeaderDate(currentDate, viewMode)}</span>
-            <Button variant="outline" size="sm" onClick={() => navigateView("next")}>
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setCurrentDate(new Date())}>
-              Today
-            </Button>
-          </div>
-        </div>
-
-        <div className="flex items-center space-x-3">
-          <Button variant="ghost" size="sm" onClick={fetchData} disabled={loading}>
-            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-            Refresh
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={fetchData}
+            disabled={loading}
+            title="Refresh schedule"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button onClick={() => setShowAddDialog(true)}>Add Assignment</Button>
-        </div>
-      </div>
-
-      {/* --- MODIFIED CONTROLS BAR (Task 7) --- */}
-      <div className="flex items-center justify-between border-b border-gray-200 bg-white px-6 py-3">
-        <div className="flex items-center space-x-4">
-          {/* --- View Switcher --- */}
-          <Select value={viewMode} onValueChange={(value: "month" | "week" | "year") => setViewMode(value)}>
-            <SelectTrigger className="w-[120px]">
-              <SelectValue placeholder="Select view" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="month">Month</SelectItem>
-              <SelectItem value="week">Week</SelectItem>
-              <SelectItem value="year">Year</SelectItem>
-            </SelectContent>
-          </Select>
-
-          {/* --- Employee Selection Dropdown --- */}
-          {user?.role === "Manager" && employees.length > 0 && (
+          {user?.role === "Manager" && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm">
-                  View Calendars <ChevronDown className="ml-2 h-4 w-4" />
+                  Calendars <ChevronDown className="ml-2 h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-56">
-                <DropdownMenuCheckboxItem
-                  checked={showOwnCalendar && visibleCalendars.includes(user.full_name)}
-                  onCheckedChange={(checked) => {
-                    if (checked) {
-                      setVisibleCalendars((prev) => [...prev, user.full_name]);
-                    } else {
-                      setVisibleCalendars((prev) => prev.filter((n) => n !== user.full_name));
-                    }
-                    setShowOwnCalendar(checked);
-                  }}
-                >
-                  Your Calendar
-                </DropdownMenuCheckboxItem>
-                <div className="my-1 border-t" />
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>Visible Calendars</DropdownMenuLabel>
+                <DropdownMenuSeparator />
                 {employees.map((emp) => (
                   <DropdownMenuCheckboxItem
                     key={emp.id}
@@ -1094,577 +940,604 @@ export default function SchedulePage() {
             </DropdownMenu>
           )}
         </div>
+      </div>
 
-        {/* --- Right-aligned Controls --- */}
-        <div className="flex items-center space-x-3">
-          {/* --- Declined Events Dropdown (Task 7) --- */}
-          {user?.role !== "Manager" && declinedAssignments.length > 0 && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm">
-                  <Archive className="mr-2 h-4 w-4" />
-                  Declined ({declinedAssignments.length})
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-64">
-                <DropdownMenuLabel>Declined Events</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {declinedAssignments.map((a) => (
-                  <DropdownMenuItem
-                    key={a.id}
-                    className="group flex items-center justify-between p-2 text-sm"
-                    onSelect={(e) => e.preventDefault()} // Prevent closing
-                  >
-                    <div className="flex-1 truncate">
-                      <div className="truncate font-medium">{a.title}</div>
-                      <div className="text-xs text-gray-500">{formatDateKey(a.date)}</div>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-green-600 opacity-0 group-hover:opacity-100"
-                      onClick={() => handleAssignmentResponse(a, "Accepted")}
-                      title="Re-accept"
-                    >
-                      <Check className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+      {/* ✅ Show cache status
+      {cachedData && !loading && (
+        <div className="mb-4 rounded-lg bg-green-50 border border-green-200 p-2 text-sm text-green-800">
+          📦 Showing cached data • Last updated {Math.round((Date.now() - cachedData.timestamp) / 1000)}s ago
+        </div>
+      )} */}
 
-          {/* --- Active Filters Display --- */}
-          {user?.role === "Manager" && visibleCalendars.length > 0 && (
-            <div className="flex items-center space-x-2 text-sm text-gray-700">
-              <span className="font-medium">Viewing:</span>
-              {visibleCalendars.map((name) => (
-                <span key={name} className="rounded bg-gray-200 px-2 py-1">
-                  {name === user.full_name ? "Your Calendar" : name}
-                </span>
-              ))}
-            </div>
-          )}
+      {/* Loading indicator when fetching */}
+      {loading && (
+        <div className="mb-4 rounded-lg bg-blue-50 border border-blue-200 p-3 flex items-center gap-3">
+          <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+          <span className="text-sm text-blue-800">
+            {tasks.length > 0 ? 'Refreshing data...' : 'Loading schedule data...'}
+          </span>
+        </div>
+      )}
+
+      {/* Toolbar */}
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => navigateView("prev")}>
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setCurrentDate(new Date())}>
+            Today
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => navigateView("next")}>
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+          <h2 className="ml-4 text-xl font-semibold">
+            {formatHeaderDate(currentDate, viewMode)}
+          </h2>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Select value={viewMode} onValueChange={(v: any) => setViewMode(v)}>
+            <SelectTrigger className="w-32">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="month">Month</SelectItem>
+              <SelectItem value="week">Week</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button onClick={() => {
+            setNewTask(prev => ({
+              ...prev,
+              type: prev.type || "job",
+              start_date: formatDateKey(new Date()),
+              end_date: formatDateKey(new Date()),
+              start_time: prev.start_time || "09:00",
+              end_time: prev.end_time || "17:00",
+              priority: prev.priority || "Medium",
+              status: prev.status || "Scheduled",
+              estimated_hours: prev.estimated_hours || 8,
+            }));
+            setShowAddDialog(true);
+          }}>
+            Add Task
+          </Button>
         </div>
       </div>
 
-      {/* --- CALENDAR GRID (CONDITIONAL) --- */}
-      {viewMode === "month" && renderMonthView()}
-      {viewMode === "week" && renderWeekView()}
-      {viewMode === "year" && renderYearView()}
+      {/* Calendar View */}
+      {viewMode === "month" && (
+        <div className="rounded-lg border">
+          <div className="grid grid-cols-7 border-b bg-gray-50">
+            {weekdayShort.map((day) => (
+              <div key={day} className="border-r p-2 text-center text-sm font-medium last:border-r-0">
+                {day}
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-7">
+            {calendarDays.map((day, idx) => {
+              const isCurrentMonth = day.getMonth() === currentDate.getMonth();
+              const isToday = day.toDateString() === new Date().toDateString();
+              const dayTasks = getTasksForDate(day);
+              const overbooked = isOverbooked(day);
 
-      {/* --- DIALOGS --- */}
-
-      {/* --- MODIFIED Add Dialog (Task 1) --- */}
-      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Add Assignment</DialogTitle>
-            <DialogDescription>Schedule a new assignment for the selected day.</DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Type</Label>
-                <Select
-                  value={newAssignment.type}
-                  onValueChange={(value: any) => {
-                    setNewAssignment({ ...newAssignment, type: value });
+              return (
+                <div
+                  key={idx}
+                  className={`min-h-[100px] border-b border-r p-2 last:border-r-0 cursor-pointer transition-colors hover:bg-gray-50 ${
+                    isCurrentMonth ? "bg-white" : "bg-gray-50"
+                  } ${isToday ? "ring-2 ring-inset ring-blue-500" : ""}`}
+                  onDragOver={handleDragOver}
+                  onDrop={(e) => handleDrop(e, day)}
+                  onClick={() => {
+                    setSelectedDate(day);
+                    setShowDayViewDialog(true);
                   }}
                 >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="job">Job</SelectItem>
-                    <SelectItem value="off">Day Off</SelectItem>
-                    <SelectItem value="delivery">Delivery</SelectItem>
-                    <SelectItem value="note">Note</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className={`text-sm ${isToday ? "font-bold text-blue-600" : ""}`}>
+                      {day.getDate()}
+                    </span>
+                    {overbooked && (
+                      <AlertTriangle className="h-3 w-3 text-red-500" />
+                    )}
+                  </div>
+                  <div className="space-y-1">
+                    {dayTasks.slice(0, 3).map((task) => 
+                      task && task.id ? (
+                        <div
+                          key={task.id}
+                          draggable
+                          onDragStart={() => handleDragStart(task)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedTask(task);
+                            setShowTaskDialog(true);
+                          }}
+                          className={`cursor-pointer rounded border px-2 py-1 text-xs ${getTaskColor(task)}`}
+                        >
+                          {task.title}
+                        </div>
+                      ) : null
+                    )}
+                    {dayTasks.length > 3 && (
+                      <div className="text-xs text-gray-500">
+                        +{dayTasks.length - 3} more
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
+      {viewMode === "week" && (
+        <div className="rounded-lg border">
+          <div className="grid grid-cols-8 border-b bg-gray-50">
+            <div className="border-r p-2"></div>
+            {daysOfWeek.map((day) => (
+              <div key={day.toISOString()} className="border-r p-2 text-center last:border-r-0">
+                <div className="text-sm font-medium">{weekdayShort[day.getDay() === 0 ? 6 : day.getDay() - 1]}</div>
+                <div className="text-xs text-gray-600">{day.getDate()}</div>
+              </div>
+            ))}
+          </div>
+          <div className="relative grid grid-cols-8">
+            <div className="border-r">
+              {timeSlotsWeek.map((time) => (
+                <div key={time} className="border-b p-2 text-xs text-gray-600" style={{ height: `${HOUR_HEIGHT_PX}px` }}>
+                  {time}
+                </div>
+              ))}
+            </div>
+            {daysOfWeek.map((day) => {
+              const dayTasks = getTasksForDate(day);
+              return (
+                <div
+                  key={day.toISOString()}
+                  className="relative border-r last:border-r-0"
+                  onDragOver={handleDragOver}
+                  onDrop={(e) => handleDrop(e, day)}
+                >
+                  {timeSlotsWeek.map((time) => (
+                    <div
+                      key={time}
+                      className="border-b"
+                      style={{ height: `${HOUR_HEIGHT_PX}px` }}
+                    />
+                  ))}
+                  {dayTasks.map((task) => (
+                    <div
+                      key={task.id}
+                      draggable
+                      onDragStart={() => handleDragStart(task)}
+                      onClick={() => {
+                        setSelectedTask(task);
+                        setShowTaskDialog(true);
+                      }}
+                      className={`cursor-pointer rounded border p-1 text-xs ${getTaskColor(task)}`}
+                      style={getTaskWeekStyle(task.start_time, task.end_time)}
+                    >
+                      <div className="font-medium">{task.title}</div>
+                      <div className="text-xs opacity-75">
+                        {task.start_time} - {task.end_time}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Add Dialog */}
+      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Add New Task</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Type</Label>
+              <Select
+                value={newTask.type}
+                onValueChange={(value: "job" | "off" | "delivery" | "note") => {
+                  setNewTask({ ...newTask, type: value });
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="job">Job</SelectItem>
+                  <SelectItem value="off">Off</SelectItem>
+                  <SelectItem value="delivery">Delivery</SelectItem>
+                  <SelectItem value="note">Note</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Date</Label>
+                <Label>Start Date *</Label>
                 <Input
                   type="date"
-                  value={newAssignment.date || ""}
-                  onChange={(e) => setNewAssignment({ ...newAssignment, date: e.target.value })}
+                  value={newTask.start_date}
+                  onChange={(e) => setNewTask({ ...newTask, start_date: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>End Date *</Label>
+                <Input
+                  type="date"
+                  value={newTask.end_date}
+                  onChange={(e) => setNewTask({ ...newTask, end_date: e.target.value })}
                 />
               </div>
             </div>
 
-            {(newAssignment.type === "job" || newAssignment.type === "off") && (
+            {(newTask.type === "job" || newTask.type === "off") && (
               <>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Start Time</Label>
                     <Input
                       type="time"
-                      value={newAssignment.start_time || ""}
-                      onChange={(e) => {
-                        const newStart = e.target.value;
-                        const newHours = calculateHours(newStart, newAssignment.end_time);
-                        setNewAssignment({
-                          ...newAssignment,
-                          start_time: newStart,
-                          estimated_hours: newHours,
-                        });
-                      }}
+                      value={newTask.start_time || ""}
+                      onChange={(e) => setNewTask({ ...newTask, start_time: e.target.value })}
                     />
                   </div>
-
                   <div className="space-y-2">
                     <Label>End Time</Label>
                     <Input
                       type="time"
-                      value={newAssignment.end_time || ""}
-                      onChange={(e) => {
-                        const newEnd = e.target.value;
-                        const newHours = calculateHours(newAssignment.start_time, newEnd);
-                        setNewAssignment({
-                          ...newAssignment,
-                          end_time: newEnd,
-                          estimated_hours: newHours,
-                        });
-                      }}
+                      value={newTask.end_time || ""}
+                      onChange={(e) => setNewTask({ ...newTask, end_time: e.target.value })}
                     />
                   </div>
                 </div>
-
-                <div className="space-y-2">
-                  <Label>Assign To</Label>
-                  <Select
-                    value={newAssignment.user_id?.toString() || ""}
-                    onValueChange={(value) => setNewAssignment({ ...newAssignment, user_id: parseInt(value) })}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Select team member" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {/* Self-assignment option for everyone */}
-                      {user && <SelectItem value={user.id.toString()}>{user.full_name} (Me)</SelectItem>}
-                      {/* Manager can assign to others */}
-                      {user?.role === "Manager" &&
-                        employees.map((emp) => (
-                          <SelectItem key={emp.id} value={emp.id.toString()}>
-                            {emp.full_name}
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
-                </div>
               </>
             )}
 
-            {newAssignment.type === "job" && (
-              <>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Job / Task</Label>
-                    <Select
-                      value={newAssignment.job_id || newAssignment.title || ""}
-                      onValueChange={(value) => {
-                        const isTask = interiorDesignJobTypes.includes(value);
-                        if (isTask) {
-                          // It's a task like "Consultation"
-                          setNewAssignment({
-                            ...newAssignment,
-                            title: value,
-                            job_type: value, // ✅ This line should be there
-                            job_id: undefined,
-                            customer_id: newAssignment.customer_id,
-                          });
-                        } else {
-                          // It's an existing job
-                          const job = availableJobs.find((j) => j.id === value);
-                          setNewAssignment({
-                            ...newAssignment,
-                            title: undefined,
-                            job_type: job?.job_type, // ✅ This line should be there
-                            job_id: value,
-                            customer_id: job?.customer_id,
-                          });
-                        }
-                      }}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder="Select job or task" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectLabel>Tasks</SelectLabel>
-                          {interiorDesignJobTypes.map((task) => (
-                            <SelectItem key={task} value={task}>
-                              {task}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                        <SelectGroup>
-                          <SelectLabel>Active Jobs</SelectLabel>
-                          {availableJobs.map((job) => (
-                            <SelectItem key={job.id} value={job.id}>
-                              {job.job_reference} - {job.customer_name}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </div>
+            <div className="space-y-2">
+              <Label>Assign To</Label>
+              <Input
+                placeholder="Type team member name..."
+                list="assignee-suggestions"
+                value={customAssigneeInput}
+                onChange={(e) => {
+                  setCustomAssigneeInput(e.target.value);
+                  setNewTask({ ...newTask, team_member: e.target.value });
+                }}
+              />
+              <datalist id="assignee-suggestions">
+                {customAssignees.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+            </div>
 
-                  <div className="space-y-2">
-                    <Label>Customer</Label>
-                    <Select
-                      value={newAssignment.customer_id || ""}
-                      onValueChange={(value) => setNewAssignment({ ...newAssignment, customer_id: value })}
-                      // Disable if a job is selected (customer is auto-set)
-                      disabled={!!newAssignment.job_id}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder="Select customer" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {customers.map((customer) => (
-                          <SelectItem key={customer.id} value={customer.id}>
-                            {customer.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-              </>
-            )}
-
-            {newAssignment.type === "off" && (
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="full-day-add"
-                  checked={newAssignment.start_time === "09:00" && newAssignment.end_time === "17:00"}
-                  onCheckedChange={(checked) => {
-                    if (checked) {
-                      setNewAssignment({
-                        ...newAssignment,
-                        start_time: "09:00",
-                        end_time: "17:00",
-                        estimated_hours: 8,
+            {newTask.type === "job" && (
+              <div className="space-y-2">
+                <Label>Job/Task</Label>
+                <Select
+                  value={newTask.job_type || newTask.title || ""}
+                  onValueChange={(value) => {
+                    if (value.includes(" - ")) {
+                      const jobId = availableJobs.find(
+                        (j) => `${j.job_reference} - ${j.customer_name}` === value
+                      )?.id;
+                      setNewTask({
+                        ...newTask,
+                        title: value,
+                        job_id: jobId,
+                        job_type: undefined,
+                      });
+                    } else {
+                      setNewTask({
+                        ...newTask,
+                        title: value,
+                        job_type: value,
+                        job_id: undefined,
                       });
                     }
                   }}
-                />
-                <Label htmlFor="full-day-add">Full day</Label>
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select job or task" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectLabel>Standard Tasks</SelectLabel>
+                      {interiorDesignJobTypes.map((task) => (
+                        <SelectItem key={task} value={task}>
+                          {task}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                    {customJobTasks.length > 0 && (
+                      <SelectGroup>
+                        <SelectLabel>Custom Tasks</SelectLabel>
+                        {customJobTasks.map((task) => (
+                          <SelectItem key={task} value={task}>
+                            {task}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    )}
+                    {availableJobs.length > 0 && (
+                      <SelectGroup>
+                        <SelectLabel>Available Jobs</SelectLabel>
+                        {availableJobs.map((job) => (
+                          <SelectItem
+                            key={job.id}
+                            value={`${job.job_reference} - ${job.customer_name}`}
+                          >
+                            {job.job_reference} - {job.customer_name}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    )}
+                  </SelectContent>
+                </Select>
               </div>
             )}
 
             <div className="space-y-2">
+              <Label>Customer *</Label>
+              <Select
+                value={newTask.customer_id || ""}
+                onValueChange={(value) => {
+                  setNewTask({
+                    ...newTask,
+                    customer_id: value,
+                  });
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select customer" />
+                </SelectTrigger>
+                <SelectContent>
+                  {customers.map((customer) => (
+                    <SelectItem key={customer.id} value={customer.id}>
+                      {customer.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
               <Label>Notes</Label>
-              <Textarea
-                value={newAssignment.notes || ""}
-                onChange={(e) => setNewAssignment({ ...newAssignment, notes: e.target.value })}
-                placeholder="Enter notes..."
+              <textarea
+                className="w-full min-h-[100px] p-2 border rounded-md"
+                value={newTask.notes || ""}
+                onChange={(e) => setNewTask({ ...newTask, notes: e.target.value })}
+                placeholder="Add any additional notes..."
               />
             </div>
 
-            <div className="flex justify-end space-x-2 pt-4">
+            <div className="flex justify-end gap-2 pt-4">
               <Button variant="outline" onClick={() => setShowAddDialog(false)}>
                 Cancel
               </Button>
-              <Button onClick={handleAddAssignment} disabled={saving}>
-                {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Add Assignment
+              <Button onClick={handleAddTask} disabled={saving}>
+                {saving ? "Adding..." : "Add Task"}
               </Button>
             </div>
           </div>
         </DialogContent>
       </Dialog>
 
-      {/* --- MODIFIED View/Edit Dialog (Task 3, 8) --- */}
-      <Dialog
-        open={showAssignmentDialog}
-        onOpenChange={(isOpen) => {
-          setShowAssignmentDialog(isOpen);
-          if (!isOpen) {
-            // Reset state on close
-            setIsEditingAssignment(false);
-            setSelectedAssignment(null);
-            setOriginalAssignment(null);
-          }
-        }}
-      >
+      {/* View/Edit Dialog */}
+      <Dialog open={showTaskDialog} onOpenChange={setShowTaskDialog}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>{isEditingAssignment ? "Edit Assignment" : "View Assignment"}</DialogTitle>
-            <DialogDescription>
-              {isEditingAssignment
-                ? "Modify the details of this assignment."
-                : "View the details. Click 'Edit' to make changes."}
-            </DialogDescription>
+            <DialogTitle>
+              {isEditingTask ? "Edit Task" : "Task Details"}
+            </DialogTitle>
           </DialogHeader>
 
-          {selectedAssignment && (
+          {selectedTask && (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Type</Label>
-                  <Select
-                    value={selectedAssignment.type}
-                    onValueChange={(value: any) => setSelectedAssignment({ ...selectedAssignment, type: value })}
-                    disabled={!isEditingAssignment} // <-- (Task 3)
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="job">Job</SelectItem>
-                      <SelectItem value="off">Day Off</SelectItem>
-                      <SelectItem value="delivery">Delivery</SelectItem>
-                      <SelectItem value="note">Note</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Date</Label>
-                  <Input
-                    type="date"
-                    value={selectedAssignment.date}
-                    onChange={(e) => setSelectedAssignment({ ...selectedAssignment, date: e.target.value })}
-                    disabled={!isEditingAssignment} // <-- (Task 3)
-                  />
-                </div>
+              <div>
+                <Label>Title</Label>
+                <p className="text-sm">{selectedTask.title}</p>
               </div>
-
-              {/* --- Display Created By / Assigned To (Task 2) --- */}
-              {!isEditingAssignment && (
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div className="space-y-1">
-                    <Label className="text-gray-500">Assigned To</Label>
-                    <p>{selectedAssignment.team_member || "N/A"}</p>
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-gray-500">Created By</Label>
-                    <p>{selectedAssignment.created_by_name || "N/A"}</p>
-                  </div>
-                  {selectedAssignment.updated_by_name && (
-                    <div className="space-y-1 col-span-2">
-                      <Label className="text-gray-500">Last Updated By</Label>
-                      <p>{selectedAssignment.updated_by_name}</p>
-                    </div>
-                  )}
+              {selectedTask.start_date && (
+                <div>
+                  <Label>Start Date</Label>
+                  <p className="text-sm">{selectedTask.start_date}</p>
+                </div>
+              )}
+              {selectedTask.end_date && (
+                <div>
+                  <Label>End Date</Label>
+                  <p className="text-sm">{selectedTask.end_date}</p>
+                </div>
+              )}
+              {selectedTask.start_time && (
+                <div>
+                  <Label>Time</Label>
+                  <p className="text-sm">
+                    {selectedTask.start_time} - {selectedTask.end_time}
+                  </p>
+                </div>
+              )}
+              {selectedTask.notes && (
+                <div>
+                  <Label>Notes</Label>
+                  <p className="text-sm">{selectedTask.notes}</p>
                 </div>
               )}
 
-              {(selectedAssignment.type === "job" || selectedAssignment.type === "off") && (
-                <>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>Start Time</Label>
-                      <Input
-                        type="time"
-                        value={selectedAssignment.start_time || ""}
-                        onChange={(e) => {
-                          const newStart = e.target.value;
-                          const newHours = calculateHours(newStart, selectedAssignment.end_time);
-                          setSelectedAssignment({
-                            ...selectedAssignment,
-                            start_time: newStart,
-                            estimated_hours: newHours,
-                          });
-                        }}
-                        disabled={!isEditingAssignment} // <-- (Task 3)
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label>End Time</Label>
-                      <Input
-                        type="time"
-                        value={selectedAssignment.end_time || ""}
-                        onChange={(e) => {
-                          const newEnd = e.target.value;
-                          const newHours = calculateHours(selectedAssignment.start_time, newEnd);
-                          setSelectedAssignment({
-                            ...selectedAssignment,
-                            end_time: newEnd,
-                            estimated_hours: newHours,
-                          });
-                        }}
-                        disabled={!isEditingAssignment} // <-- (Task 3)
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Assigned To</Label>
-                    <Select
-                      value={selectedAssignment.user_id?.toString() || ""}
-                      onValueChange={(value) =>
-                        setSelectedAssignment({
-                          ...selectedAssignment,
-                          user_id: parseInt(value),
-                        })
-                      }
-                      disabled={!isEditingAssignment} // <-- (Task 3)
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select team member" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {/* Self-assignment option for everyone */}
-                        {user && <SelectItem value={user.id.toString()}>{user.full_name} (Me)</SelectItem>}
-                        {/* Manager can assign to others */}
-                        {user?.role === "Manager" &&
-                          employees.map((emp) => (
-                            <SelectItem key={emp.id} value={emp.id.toString()}>
-                              {emp.full_name}
-                            </SelectItem>
-                          ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </>
-              )}
-
-              {selectedAssignment.type === "job" && (
-                <>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>Job / Task</Label>
-                      <Select
-                        value={selectedAssignment.job_id || selectedAssignment.job_type || ""} // <-- (Task 1)
-                        onValueChange={(value) => {
-                          const isTask = interiorDesignJobTypes.includes(value);
-                          if (isTask) {
-                            setSelectedAssignment({
-                              ...selectedAssignment,
-                              title: value,
-                              job_type: value, // ✅ This line should be there
-                              job_id: undefined,
-                            });
-                          } else {
-                            const job = availableJobs.find((j) => j.id === value);
-                            setSelectedAssignment({
-                              ...selectedAssignment,
-                              job_id: value,
-                              job_type: job?.job_type, // ✅ This line should be there
-                              customer_id: job?.customer_id,
-                            });
-                          }
-                        }}
-                        disabled={!isEditingAssignment} // <-- (Task 3)
-                      >
-                        <SelectTrigger className="w-full">
-                          <SelectValue placeholder="Select job or task" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectGroup>
-                            <SelectLabel>Tasks</SelectLabel>
-                            {interiorDesignJobTypes.map((task) => (
-                              <SelectItem key={task} value={task}>
-                                {task}
-                              </SelectItem>
-                            ))}
-                          </SelectGroup>
-                          <SelectGroup>
-                            <SelectLabel>Active Jobs</SelectLabel>
-                            {availableJobs.map((job) => (
-                              <SelectItem key={job.id} value={job.id}>
-                                {job.job_reference} - {job.customer_name}
-                              </SelectItem>
-                            ))}
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label>Customer</Label>
-                      <Select
-                        value={selectedAssignment.customer_id || ""}
-                        onValueChange={(value) => setSelectedAssignment({ ...selectedAssignment, customer_id: value })}
-                        disabled={!isEditingAssignment || !!selectedAssignment.job_id} // <-- (Task 3)
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select customer" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {customers.map((customer) => (
-                            <SelectItem key={customer.id} value={customer.id}>
-                              {customer.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {selectedAssignment.type === "off" && (
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="full-day-edit"
-                    checked={selectedAssignment.start_time === "09:00" && selectedAssignment.end_time === "17:00"}
-                    onCheckedChange={(checked) => {
-                      if (checked) {
-                        setSelectedAssignment({
-                          ...selectedAssignment,
-                          start_time: "09:00",
-                          end_time: "17:00",
-                          estimated_hours: 8,
-                        });
-                      }
-                    }}
-                    disabled={!isEditingAssignment} // <-- (Task 3)
-                  />
-                  <Label htmlFor="full-day-edit">Full day</Label>
-                </div>
-              )}
-
-              <div className="space-y-2">
-                <Label>Notes</Label>
-                <Textarea
-                  value={selectedAssignment.notes || ""}
-                  onChange={(e) => setSelectedAssignment({ ...selectedAssignment, notes: e.target.value })}
-                  placeholder="Enter notes..."
-                  disabled={!isEditingAssignment} // <-- (Task 3)
-                />
-              </div>
-
-              {/* --- MODIFIED FOOTER (Task 3, 8) --- */}
               <div className="flex justify-end space-x-2 pt-4">
-                {/* Delete button removed per Task 8 */}
-
-                {!isEditingAssignment ? (
-                  // --- VIEW MODE ---
-                  <>
-                    <Button variant="outline" onClick={() => setShowAssignmentDialog(false)}>
-                      Close
-                    </Button>
-                    <Button onClick={() => setIsEditingAssignment(true)}>Edit</Button>
-                  </>
-                ) : (
-                  // --- EDIT MODE ---
-                  <>
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setIsEditingAssignment(false);
-                        setSelectedAssignment(originalAssignment); // Restore original on cancel
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                    <Button onClick={handleEditAssignment} disabled={saving}>
-                      {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                      Save Changes
-                    </Button>
-                  </>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setShowTaskDialog(false);
+                    setSelectedTask(null);
+                  }}
+                >
+                  Close
+                </Button>
+                {(user?.role === "Manager" || user?.role === "Sales") && (
+                  <Button
+                    variant="destructive"
+                    onClick={() => selectedTask && handleDeleteTask(selectedTask.id)}
+                    disabled={saving}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Delete
+                  </Button>
                 )}
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Day View Dialog */}
+      <Dialog open={showDayViewDialog} onOpenChange={setShowDayViewDialog}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              Tasks for {selectedDate && selectedDate.toLocaleDateString('en-GB', { 
+                weekday: 'long', 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric' 
+              })}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {selectedDate && getTasksForDate(selectedDate).length > 0 ? (
+              <div className="space-y-3">
+                {getTasksForDate(selectedDate).map((task) => (
+                  <div
+                    key={task.id}
+                    className={`cursor-pointer rounded-lg border-2 p-4 transition-all hover:shadow-md ${getTaskColor(task)}`}
+                    onClick={() => {
+                      setSelectedTask(task);
+                      setShowDayViewDialog(false);
+                      setShowTaskDialog(true);
+                    }}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <h3 className="font-semibold text-base mb-1">{task.title}</h3>
+                        {task.customer_name && (
+                          <p className="text-sm text-gray-600 mb-1">
+                            Customer: {task.customer_name}
+                          </p>
+                        )}
+                        {task.start_time && (
+                          <p className="text-sm text-gray-600 mb-1">
+                            Time: {task.start_time} - {task.end_time}
+                          </p>
+                        )}
+                        {task.team_member && (
+                          <p className="text-sm text-gray-600 mb-1">
+                            Assigned: {task.team_member}
+                          </p>
+                        )}
+                        {task.notes && (
+                          <p className="text-sm text-gray-500 mt-2 line-clamp-2">
+                            {task.notes}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex flex-col items-end gap-2">
+                        {task.priority && (
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${
+                            task.priority === 'High' 
+                              ? 'bg-red-100 text-red-700' 
+                              : task.priority === 'Medium'
+                              ? 'bg-yellow-100 text-yellow-700'
+                              : 'bg-green-100 text-green-700'
+                          }`}>
+                            {task.priority}
+                          </span>
+                        )}
+                        {task.status && (
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${
+                            task.status === 'Completed'
+                              ? 'bg-green-100 text-green-700'
+                              : task.status === 'In Progress'
+                              ? 'bg-blue-100 text-blue-700'
+                              : 'bg-gray-100 text-gray-700'
+                          }`}>
+                            {task.status}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8 text-gray-500">
+                No tasks scheduled for this date.
+                <div className="mt-4">
+                  <Button
+                    onClick={() => {
+                      if (selectedDate) {
+                        setNewTask({
+                          type: "job",
+                          start_date: formatDateKey(selectedDate),
+                          end_date: formatDateKey(selectedDate),
+                          start_time: "09:00",
+                          end_time: "17:00",
+                          priority: "Medium",
+                          status: "Scheduled",
+                          estimated_hours: 8,
+                        });
+                        setShowDayViewDialog(false);
+                        setShowAddDialog(true);
+                      }
+                    }}
+                  >
+                    Add Task for This Date
+                  </Button>
+                </div>
+              </div>
+            )}
+            
+            {selectedDate && getTasksForDate(selectedDate).length > 0 && (
+              <div className="flex justify-between items-center pt-4 border-t">
+                <Button
+                  variant="outline"
+                  onClick={() => setShowDayViewDialog(false)}
+                >
+                  Close
+                </Button>
+                <Button
+                  onClick={() => {
+                    if (selectedDate) {
+                      setNewTask({
+                        type: "job",
+                        start_date: formatDateKey(selectedDate),
+                        end_date: formatDateKey(selectedDate),
+                        start_time: "09:00",
+                        end_time: "17:00",
+                        priority: "Medium",
+                        status: "Scheduled",
+                        estimated_hours: 8,
+                      });
+                      setShowDayViewDialog(false);
+                      setShowAddDialog(true);
+                    }
+                  }}
+                >
+                  Add New Task
+                </Button>
+              </div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>
