@@ -355,7 +355,7 @@ export default function CustomerDetailsPage() {
     }
 
     // Fetch customer data
-    const customerPromise = fetch(`https://aztec-interiors.onrender.com/customers/${id}`, { headers })
+    const customerPromise = fetch(`http://localhost:5000/customers/${id}`, { headers })
       .then(res => res.json())
       .then((data) => {
         // Normalize post_code → postcode
@@ -381,7 +381,7 @@ export default function CustomerDetailsPage() {
       .catch((err) => console.error("Error loading customer:", err));
 
     // Fetch jobs
-    const jobsPromise = fetch(`https://aztec-interiors.onrender.com/jobs?customer_id=${id}`, { headers })
+    const jobsPromise = fetch(`http://localhost:5000/jobs?customer_id=${id}`, { headers })
       .then((res) => {
         if (!res.ok) throw new Error("Failed to fetch jobs");
         return res.json();
@@ -411,8 +411,8 @@ export default function CustomerDetailsPage() {
     console.log("Fetching financial documents for customer:", id);
 
     Promise.all([
-      fetch(`https://aztec-interiors.onrender.com/invoices?customer_id=${id}`, { headers }).catch(() => [] as any[]),
-      fetch(`https://aztec-interiors.onrender.com/quotations?customer_id=${id}`, { headers }).catch(() => [] as any[]),
+      fetch(`http://localhost:5000/invoices?customer_id=${id}`, { headers }).catch(() => [] as any[]),
+      fetch(`http://localhost:5000/quotations?customer_id=${id}`, { headers }).catch(() => [] as any[]),
     ])
       .then(async ([invoicesRes, quotesRes]) => {
         let invoices: any[] = [];
@@ -464,7 +464,7 @@ export default function CustomerDetailsPage() {
   };
 
   const loadDrawingDocuments = (headers: HeadersInit) => {
-    const url = `https://aztec-interiors.onrender.com/files/drawings?customer_id=${id}`;
+    const url = `http://localhost:5000/files/drawings?customer_id=${id}`;
 
     fetch(url, { headers })
       .then((res) => {
@@ -500,7 +500,7 @@ export default function CustomerDetailsPage() {
   };
 
   const loadFormDocuments = (headers: HeadersInit) => {
-  const url = `https://aztec-interiors.onrender.com/files/forms?customer_id=${id}`;
+  const url = `http://localhost:5000/files/forms?customer_id=${id}`;
 
   fetch(url, { headers })
     .then((res) => {
@@ -549,7 +549,7 @@ const handleFormFileChange = async (event: React.ChangeEvent<HTMLInputElement>) 
       formData.append("file", file);
       formData.append("customer_id", id);
 
-      const response = await fetch("https://aztec-interiors.onrender.com/files/forms", {
+      const response = await fetch("http://localhost:5000/files/forms", {
         method: "POST",
         headers: headers,
         body: formData,
@@ -591,7 +591,7 @@ const handleUploadFormDocument = () => {
 };
 
 const handleViewFormDocument = (doc: FormDocument) => {
-  const BACKEND_URL = "https://aztec-interiors.onrender.com";
+  const BACKEND_URL = "http://localhost:5000";
   let viewUrl = doc.url;
 
   if (viewUrl && viewUrl.startsWith('http')) {
@@ -625,7 +625,7 @@ const handleConfirmDeleteFormDocument = async () => {
 
   try {
     const res = await fetch(
-      `https://aztec-interiors.onrender.com/files/forms/${formDocToDelete.id}`,
+      `http://localhost:5000/files/forms/${formDocToDelete.id}`,
       { method: "DELETE", headers }
     );
 
@@ -678,7 +678,7 @@ const handleConfirmDeleteFormDocument = async () => {
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
     const deletePromises = Array.from(selectedDrawings).map(drawingId =>
-      fetch(`https://aztec-interiors.onrender.com/files/drawings/${drawingId}`, {
+      fetch(`http://localhost:5000/files/drawings/${drawingId}`, {
         method: "DELETE",
         headers
       })
@@ -730,7 +730,7 @@ const handleConfirmDeleteFormDocument = async () => {
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
     const deletePromises = Array.from(selectedFormDocs).map(docId =>
-      fetch(`https://aztec-interiors.onrender.com/files/forms/${docId}`, {
+      fetch(`http://localhost:5000/files/forms/${docId}`, {
         method: "DELETE",
         headers
       })
@@ -769,7 +769,7 @@ const handleConfirmDeleteFormDocument = async () => {
         formData.append("file", file);
         formData.append("customer_id", id);
 
-        const response = await fetch("https://aztec-interiors.onrender.com/files/drawings", {
+        const response = await fetch("http://localhost:5000/files/drawings", {
           method: "POST",
           headers: headers,
           body: formData,
@@ -818,7 +818,7 @@ const handleConfirmDeleteFormDocument = async () => {
   };
 
   const handleViewDrawing = (doc: DrawingDocument) => {
-    const BACKEND_URL = "https://aztec-interiors.onrender.com";
+    const BACKEND_URL = "http://localhost:5000";
     let viewUrl = doc.url;
 
     if (viewUrl && viewUrl.startsWith('http')) {
@@ -853,7 +853,7 @@ const handleConfirmDeleteFormDocument = async () => {
 
     try {
       const res = await fetch(
-        `https://aztec-interiors.onrender.com/files/drawings/${drawingToDelete.id}`,
+        `http://localhost:5000/files/drawings/${drawingToDelete.id}`,
         { method: "DELETE", headers }
       );
 
@@ -989,7 +989,7 @@ const handleConfirmDeleteFormDocument = async () => {
     };
 
     try {
-      const response = await fetch(`https://aztec-interiors.onrender.com/projects/${selectedProject.id}`, {
+      const response = await fetch(`http://localhost:5000/projects/${selectedProject.id}`, {
         method: "PUT",
         headers: headers,
         body: JSON.stringify(dataToSave),
@@ -1064,7 +1064,7 @@ const handleConfirmDeleteFormDocument = async () => {
 
     try {
       const response = await fetch(
-        `https://aztec-interiors.onrender.com/form-submissions/${selectedForm.id}`,
+        `http://localhost:5000/form-submissions/${selectedForm.id}`,
         {
           method: "PUT",
           headers: {
@@ -1143,7 +1143,7 @@ const handleConfirmDeleteFormDocument = async () => {
 
     setGenerating(true);
     try {
-      const response = await fetch(`https://aztec-interiors.onrender.com/customers/${id}/generate-form-link`, {
+      const response = await fetch(`http://localhost:5000/customers/${id}/generate-form-link`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1336,7 +1336,7 @@ const handleConfirmDeleteFormDocument = async () => {
 
     setGenerating(true);
     try {
-      const response = await fetch(`https://aztec-interiors.onrender.com/customers/${id}/generate-form-link`, {
+      const response = await fetch(`http://localhost:5000/customers/${id}/generate-form-link`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1375,7 +1375,7 @@ const handleConfirmDeleteFormDocument = async () => {
 
     setGenerating(true);
     try {
-      const response = await fetch(`https://aztec-interiors.onrender.com/customers/${id}/generate-form-link`, {
+      const response = await fetch(`http://localhost:5000/customers/${id}/generate-form-link`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1960,7 +1960,7 @@ const handleConfirmDeleteFormDocument = async () => {
     };
 
     try {
-      const response = await fetch(`https://aztec-interiors.onrender.com/projects/${projectToDelete.id}`, {
+      const response = await fetch(`http://localhost:5000/projects/${projectToDelete.id}`, {
         method: "DELETE",
         headers: headers,
       });
@@ -1994,7 +1994,7 @@ const handleConfirmDeleteFormDocument = async () => {
         return;
       }
 
-      const response = await fetch(`https://aztec-interiors.onrender.com/form-submissions/${formToDelete.id}`, {
+      const response = await fetch(`http://localhost:5000/form-submissions/${formToDelete.id}`, {
         method: "DELETE",
         headers: {
           Authorization: `Bearer ${token}`,

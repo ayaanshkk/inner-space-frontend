@@ -27,6 +27,7 @@ import {
   useContext,
   useState,
   useEffect,
+  useRef,
 } from 'react';
 import { createPortal } from 'react-dom';
 import tunnel from 'tunnel-rat';
@@ -214,14 +215,21 @@ export const KanbanProvider = <
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const [localData, setLocalData] = useState<T[]>(data);
   const [isDragging, setIsDragging] = useState(false);
+  const previousDataRef = useRef<string>('');
 
-  // 🔑 CRITICAL FIX: Only sync external data when NOT dragging
+  // 🔑 CRITICAL FIX: Only sync when data actually changes AND not dragging
   useEffect(() => {
-    if (!isDragging) {
-      console.log('📥 Syncing props to local state (not dragging)');
+    const currentDataString = JSON.stringify(data);
+    const hasDataChanged = currentDataString !== previousDataRef.current;
+    
+    if (!isDragging && hasDataChanged) {
+      console.log('📥 Syncing external data to local state');
       setLocalData(data);
-    } else {
+      previousDataRef.current = currentDataString;
+    } else if (isDragging) {
       console.log('⏸️ Skipping sync - drag in progress');
+    } else {
+      console.log('⏸️ Skipping sync - data unchanged');
     }
   }, [data, isDragging]);
 
@@ -266,17 +274,15 @@ export const KanbanProvider = <
 
     const activeColumn = activeItem.column;
     
-    // ✅ CRITICAL FIX: Safely determine overColumn without forcing to the first column (Lead)
+    // ✅ CRITICAL FIX: Safely determine overColumn
     let overColumn = overItem?.column;
 
     if (!overColumn) {
-      // Check if we are dragging over an empty column board itself
       const overCol = columns.find(col => col.id === over.id);
       if (overCol) {
         overColumn = overCol.id;
       } else {
-        // If still no valid column, default to the ACTIVE item's current column to avoid snapping to the wrong column.
-        overColumn = activeColumn; 
+        overColumn = activeColumn;
       }
     }
 
@@ -302,10 +308,7 @@ export const KanbanProvider = <
   };
 
   const handleDragEnd = async (event: DragEndEvent) => {
-    console.log('🎬 Drag ended:', { 
-      activeId: event.active.id, 
-      overId: event.over?.id 
-    });
+    console.log('🎬 Drag ended');
 
     const { active, over } = event;
 
@@ -313,11 +316,9 @@ export const KanbanProvider = <
       console.log('⚠️ No drop target - reverting');
       setActiveCardId(null);
       setIsDragging(false);
-      setLocalData(data);
       return;
     }
 
-    // Calculate final data
     const finalData = [...localData];
     
     if (active.id !== over.id) {
@@ -329,16 +330,18 @@ export const KanbanProvider = <
         
         console.log('✅ Calling onDataChange with final data');
         
+        // Important: Set isDragging to false BEFORE calling onDataChange
+        // This allows the parent to update without triggering a re-sync
+        setIsDragging(false);
+        setActiveCardId(null);
+        
         try {
-          // Call the parent's data change handler (which handles the API update)
           await onDataChange?.(reorderedData);
-          console.log('✅ API call completed successfully');
+          console.log('✅ API call completed');
         } catch (error) {
           console.error('❌ API call failed:', error);
-          setLocalData(data); // Revert on error
-        } finally {
-          setActiveCardId(null);
-          setIsDragging(false);
+          // Revert on error
+          setLocalData(data);
         }
         
         onDragEnd?.(event);
@@ -346,18 +349,17 @@ export const KanbanProvider = <
       }
     }
 
-    // If active.id === over.id, this block handles column changes (e.g., dragging to an empty column)
-    console.log('✅ Calling onDataChange (column change/commit only)');
+    // Column change only (no reorder)
+    console.log('✅ Calling onDataChange (column change)');
+    setIsDragging(false);
+    setActiveCardId(null);
     
     try {
       await onDataChange?.(finalData);
-      console.log('✅ API call completed successfully');
+      console.log('✅ API call completed');
     } catch (error) {
       console.error('❌ API call failed:', error);
       setLocalData(data);
-    } finally {
-      setActiveCardId(null);
-      setIsDragging(false);
     }
     
     onDragEnd?.(event);
@@ -366,24 +368,20 @@ export const KanbanProvider = <
   const announcements: Announcements = {
     onDragStart({ active }) {
       const { name, column } = localData.find((item) => item.id === active.id) ?? {};
-
       return `Picked up the card "${name}" from the "${column}" column`;
     },
     onDragOver({ active, over }) {
       const { name } = localData.find((item) => item.id === active.id) ?? {};
       const newColumn = columns.find((column) => column.id === over?.id)?.name;
-
       return `Dragged the card "${name}" over the "${newColumn}" column`;
     },
     onDragEnd({ active, over }) {
       const { name } = localData.find((item) => item.id === active.id) ?? {};
       const newColumn = columns.find((column) => column.id === over?.id)?.name;
-
       return `Dropped the card "${name}" into the "${newColumn}" column`;
     },
     onDragCancel({ active }) {
       const { name } = localData.find((item) => item.id === active.id) ?? {};
-
       return `Cancelled dragging the card "${name}"`;
     },
   };

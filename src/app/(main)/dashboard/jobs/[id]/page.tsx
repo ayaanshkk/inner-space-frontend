@@ -504,7 +504,7 @@ export default function JobDetailsPage() {
                             onClick={() => {
                               const viewUrl = doc.url.startsWith('http') 
                                 ? doc.url 
-                                : `https://aztec-interiors.onrender.com${doc.url}`;
+                                : `http://localhost:5000${doc.url}`;
                               window.open(viewUrl, '_blank');
                             }}
                           >
@@ -517,7 +517,7 @@ export default function JobDetailsPage() {
                             onClick={() => {
                               const downloadUrl = doc.url.startsWith('http') 
                                 ? doc.url 
-                                : `https://aztec-interiors.onrender.com${doc.url}`;
+                                : `http://localhost:5000${doc.url}`;
                               const link = document.createElement('a');
                               link.href = downloadUrl;
                               link.download = doc.filename;

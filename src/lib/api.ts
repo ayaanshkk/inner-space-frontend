@@ -99,22 +99,15 @@ export async function fetchWithAuth(path: string, options: RequestInit = {}) {
       headers,
     }, 60000);
 
-    // ✅ FIX: Mock Auth Bypass (Updated)
-    // If we get a 401, we create a new successful Response object (status 200) 
-    // whose body is an empty JSON array []. This ensures components expecting an array 
-    // (like pipelineItems) do not crash when calling .filter or .map.
+    // ✅ Handle 401 - redirect to login (real auth)
     if (response.status === 401) {
-      console.warn("⚠️ Got 401 from backend - Bypassing component .ok check for mock auth. Returning empty array.");
-      
-      // Return a synthesized 200 OK response with an empty array body.
-      return new Response(JSON.stringify([]), { // <--- Changed JSON body to []
-          status: 200, 
-          statusText: 'OK (Mocked Array)',
-          headers: { 'Content-Type': 'application/json' }
-      });
+      console.error("🔒 Unauthorized - token invalid or expired");
+      localStorage.removeItem("auth_token");
+      redirectToLogin();
+      throw new Error("Unauthorized - please log in again");
     }
 
-    // If not 401, return the actual response
+    // Return the actual response
     return response;
   } catch (error: any) {
     if (error.name === 'AbortError') {
@@ -127,15 +120,6 @@ export async function fetchWithAuth(path: string, options: RequestInit = {}) {
 
 // ✅ Helper to handle API responses gracefully
 async function handleApiResponse(response: Response) {
-  // Note: This 401 check is primarily for fetchPublic, as fetchWithAuth 
-  // now handles 401 by returning a 200 OK array mock.
-  
-  if (response.status === 401) {
-    console.warn("⚠️ 401 response - returning empty data for mock auth");
-    // Returns an object wrapper for safety on public endpoints
-    return { data: [], error: "Backend authentication in progress" };
-  }
-
   if (response.ok) {
     const contentType = response.headers.get("content-type");
     if (contentType && contentType.includes("application/json")) {
@@ -145,6 +129,7 @@ async function handleApiResponse(response: Response) {
     }
   }
 
+  // Handle errors
   const contentType = response.headers.get("content-type");
   if (contentType && contentType.includes("application/json")) {
     const errorData = await response.json();

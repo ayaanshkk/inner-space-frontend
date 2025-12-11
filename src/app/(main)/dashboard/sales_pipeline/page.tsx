@@ -30,7 +30,6 @@ import {
   Users,
   FileText,
   DollarSign,
-  Plus,
   UserPlus,
   Phone,
   MapPin,
@@ -40,12 +39,14 @@ import {
   Lock,
   FolderOpen,
   X,
+  Clock,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { format, addDays, isWithinInterval } from "date-fns";
+import { format, addDays, isWithinInterval, differenceInDays } from "date-fns";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { fetchWithAuth } from "@/lib/api";
 import { useRouter } from "next/navigation";
+import { CreateCustomerModal } from "@/components/ui/CreateCustomerModal";
 
 // --- START OF STAGE AND ROLE DEFINITIONS ---
 
@@ -81,6 +82,61 @@ const stageColors: Record<Stage, string> = {
   Installation: "#16A34A",
   Complete: "#065F46",
   Remedial: "#DC2626",
+};
+
+const projectTypeColors: Record<string, { bg: string; border: string; badge: string; text: string }> = {
+  Kitchen: {
+    bg: "bg-orange-50",
+    border: "border-orange-200",
+    badge: "bg-orange-100 text-orange-800 border-orange-300",
+    text: "text-orange-900"
+  },
+  Bedroom: {
+    bg: "bg-purple-50",
+    border: "border-purple-200",
+    badge: "bg-purple-100 text-purple-800 border-purple-300",
+    text: "text-purple-900"
+  },
+  Wardrobe: {
+    bg: "bg-blue-50",
+    border: "border-blue-200",
+    badge: "bg-blue-100 text-blue-800 border-blue-300",
+    text: "text-blue-900"
+  },
+  Remedial: {
+    bg: "bg-red-50",
+    border: "border-red-200",
+    badge: "bg-red-100 text-red-800 border-red-300",
+    text: "text-red-900"
+  },
+  Other: {
+    bg: "bg-gray-50",
+    border: "border-gray-200",
+    badge: "bg-gray-100 text-gray-800 border-gray-300",
+    text: "text-gray-900"
+  }
+};
+
+// Helper function to get project type color
+const getProjectTypeColor = (jobType: string | undefined) => {
+  if (!jobType) return projectTypeColors.Other;
+  
+  // Handle multiple job types - use the first one for coloring
+  const firstType = jobType.split(",")[0].trim();
+  
+  return projectTypeColors[firstType as keyof typeof projectTypeColors] || projectTypeColors.Other;
+};
+
+// Helper function to calculate days in stage
+const calculateDaysInStage = (createdAt: string | null | undefined): number => {
+  if (!createdAt) return 0;
+  try {
+    const createdDate = new Date(createdAt);
+    const today = new Date();
+    return differenceInDays(today, createdDate);
+  } catch {
+    return 0;
+  }
 };
 
 type UserRole = "Manager" | "HR" | "Sales" | "Production" | "Staff";
@@ -274,6 +330,9 @@ export default function EnhancedPipelinePage() {
   });
   const prevFeaturesRef = useRef<any[]>([]);
   
+  // State for Create Customer Modal
+  const [isCreateCustomerModalOpen, setIsCreateCustomerModalOpen] = useState(false);
+  
   // Get user role and permissions
   const userRole = (user?.role || "Staff") as UserRole;
   const permissions = ROLE_PERMISSIONS[userRole as keyof typeof ROLE_PERMISSIONS] || ROLE_PERMISSIONS.Staff;
@@ -332,28 +391,27 @@ export default function EnhancedPipelinePage() {
   };
 
   // Function to map PipelineItem to Kanban features
-  const mapPipelineToFeatures = (items: PipelineItem[]) => {
+  const mapPipelineToFeatures = useCallback((items: PipelineItem[]) => {
     return items.map((item) => {
-      // DESTRUCTURE the customer/job objects to explicitly REMOVE the 'notes' field
       const { notes: customerNotes, ...customerWithoutNotes } = item.customer;
-      // The item.job could be a Job model or a Project model (from the backend fix)
       const jobWithoutNotes = item.job ? (({ notes: jobNotes, ...rest }) => rest)(item.job) : undefined;
 
       const isProjectItem = item.id.startsWith("project-");
-      // ✅ SAFE ACCESS
-      const jobName = isProjectItem ? `${item.customer.name} - ${item.job?.job_name || "Project"}` : item.customer.name;
+      
+      const jobName = isProjectItem 
+        ? `${item.customer.name} - ${item.job?.job_name || "Project"}` 
+        : item.customer.name;
+      
       const jobReference = isProjectItem
         ? item.job?.job_reference || `PROJ-${item.job?.id?.slice(-4).toUpperCase() || "NEW"}`
         : item.job?.job_reference || `JOB-${item.job?.id?.slice(-4).toUpperCase() || "NEW"}`;
 
-
       return {
         id: item.id,
-        name: `${jobReference} — ${jobName}`, // Use the corrected, unique name
+        name: `${jobReference} — ${jobName}`,
         column: stageToColumnId(item.stage),
         itemId: item.id,
-        itemType: isProjectItem ? "project" : item.type, // Explicitly set 'project' type
-        // PASS the new objects that DO NOT have the notes field
+        itemType: isProjectItem ? "project" : item.type,
         customer: customerWithoutNotes,
         job: jobWithoutNotes,
         reference: jobReference,
@@ -372,108 +430,95 @@ export default function EnhancedPipelinePage() {
         project_count: item.project_count || 0,
       };
     });
-  };
+  }, []); // Empty deps - function doesn't need to change
 
   // Fetch data from backend
   useEffect(() => {
     if (authLoading) {
-      console.log("⏳ Auth still loading, skipping fetch...");
       return;
     }
 
     if (!user || !token) {
-      console.warn("⚠️ No user or token available, skipping fetch.");
       setError("User not authenticated.");
       setLoading(false);
       return;
     }
+
+    let isCancelled = false;
 
     const fetchData = async () => {
       try {
         setLoading(true);
         setError(null);
 
-        console.log("🚀 Fetching pipeline data from /pipeline...");
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
 
-        const pipelineResponse = await fetchWithAuth("pipeline");
+        const pipelineResponse = await fetch(
+          "http://localhost:5000/pipeline",
+          {
+            headers: {
+              "Authorization": `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            signal: controller.signal,
+          }
+        );
+
+        clearTimeout(timeoutId);
 
         if (!pipelineResponse.ok) {
-          // If we get a timeout or auth error, retry once after a short delay
-          if (pipelineResponse.status === 401 || pipelineResponse.status === 408) {
-            console.log("⚠️ Auth/timeout error, retrying in 1 second...");
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            
-            const retryResponse = await fetchWithAuth("pipeline");
-            if (!retryResponse.ok) {
-              throw new Error(`Failed to fetch pipeline: ${retryResponse.status} ${retryResponse.statusText}`);
-            }
-            
-            const retryData = await retryResponse.json();
-            processPipelineData(retryData);
-            return;
-          }
-          
-          throw new Error(`Failed to fetch pipeline: ${pipelineResponse.status} ${pipelineResponse.statusText}`);
+          throw new Error(`Failed to fetch: ${pipelineResponse.status}`);
         }
 
         const rawPipelineData = await pipelineResponse.json();
+        
+        if (isCancelled) return;
+        
         processPipelineData(rawPipelineData);
 
-      } catch (err) {
-        console.error("❌ Error fetching pipeline data:", err);
-        setError(err instanceof Error ? err.message : "Failed to load pipeline data. Please refresh.");
+      } catch (err: any) {
+        if (isCancelled) return;
+        
+        if (err.name === 'AbortError') {
+          setError("Request timeout. Please refresh the page.");
+        } else {
+          setError(err instanceof Error ? err.message : "Failed to load data");
+        }
       } finally {
-        setLoading(false);
+        if (!isCancelled) {
+          setLoading(false);
+        }
       }
     };
 
     fetchData();
+
+    return () => {
+      isCancelled = true;
+    };
   }, [authLoading, token, user]);
 
   // Extract the data processing logic into a separate function
-  const processPipelineData = (rawPipelineData: any[]) => {
-    console.log(`✅ Pipeline data loaded: ${rawPipelineData.length} total items from API`);
+  const processPipelineData = useCallback((rawPipelineData: any[]) => {
+    // Use requestAnimationFrame for non-blocking UI updates
+    requestAnimationFrame(() => {
+      const pipelineItemsRetrieved = rawPipelineData
+        .map((item: any) => {
+          const isProjectItem = item.id.startsWith("project-");
+          const backendStage = item.stage?.trim() || "Lead";
+          const validStage = STAGES.includes(backendStage as Stage) ? backendStage : "Lead" as Stage;
 
-    let malformedCount = 0;
-    const pipelineItemsRetrieved = rawPipelineData
-      .map((item: any) => {
-        const isProjectItem = item.id.startsWith("project-");
-
-        const backendStage = item.stage ? item.stage.trim() : "Lead";
-
-        const validStage = STAGES.includes(backendStage) ? backendStage : ("Lead" as Stage);
-
-        if (backendStage !== "Lead" && validStage === "Lead") {
-          console.error("⚠️ Stage mismatch detected:", {
-            itemId: item.id,
-            received: backendStage,
-            fallback: validStage,
-          });
-        }
-
-        const commonItem = {
-          id: item.id,
-          customer: item.customer,
-          name: item.customer.name,
-          salesperson: item.job?.salesperson_name || item.customer.salesperson,
-          measureDate: item.job?.measure_date || item.customer.date_of_measure,
-          stage: validStage,
-        };
-
-        if (item.type === "customer") {
-          return {
-            ...commonItem,
-            type: "customer" as const,
-            reference: `CUST-${item.customer.id.slice(-4).toUpperCase()}`,
-            jobType: item.customer.project_types?.join(", "),
-            project_count: item.project_count || 0,
+          const commonItem = {
+            id: item.id,
+            customer: item.customer,
+            name: item.customer.name,
+            salesperson: item.job?.salesperson_name || item.customer.salesperson,
+            measureDate: item.job?.measure_date || item.customer.date_of_measure,
+            stage: validStage,
           };
-        } else {
-          if (!item.job) {
-            console.warn(
-              `⚠️ COMPROMISE: Malformed item (${item.id}) of type ${item.type} forced to 'customer' view to ensure all 78 customers are displayed.`
-            );
-            malformedCount++;
+
+          if (item.type === "customer") {
             return {
               ...commonItem,
               type: "customer" as const,
@@ -481,54 +526,59 @@ export default function EnhancedPipelinePage() {
               jobType: item.customer.project_types?.join(", "),
               project_count: item.project_count || 0,
             };
+          } else {
+            const projectData = item.project || item.job;
+            
+            if (!projectData) {
+              return {
+                ...commonItem,
+                type: "customer" as const,
+                reference: `CUST-${item.customer.id.slice(-4).toUpperCase()}`,
+                jobType: item.customer.project_types?.join(", "),
+                project_count: item.project_count || 0,
+              };
+            }
+
+            const jobReference = isProjectItem
+              ? projectData.job_reference || `PROJ-${projectData.id?.slice(-4).toUpperCase() || "NEW"}`
+              : projectData.job_reference || `JOB-${projectData.id?.slice(-4).toUpperCase() || "NEW"}`;
+
+            const jobName = isProjectItem 
+              ? `${item.customer.name} - ${projectData.project_name || projectData.job_name || "Project"}` 
+              : item.customer.name;
+
+            return {
+              ...commonItem,
+              type: isProjectItem ? ("project" as const) : ("job" as const),
+              job: projectData,
+              name: jobName,
+              reference: jobReference,
+              stage: validStage as Stage,
+              jobType: projectData.project_type || projectData.job_type,
+              quotePrice: projectData.quote_price,
+              agreedPrice: projectData.agreed_price,
+              soldAmount: projectData.sold_amount,
+              deposit1: projectData.deposit1,
+              deposit2: projectData.deposit2,
+              deposit1Paid: projectData.deposit1_paid || false,
+              deposit2Paid: projectData.deposit2_paid || false,
+              deliveryDate: projectData.delivery_date,
+              measureDate: projectData.date_of_measure || projectData.measure_date,
+              salesperson: projectData.salesperson_name || item.customer.salesperson,
+            };
           }
+        })
+        .filter(Boolean);
 
-          const jobStage = validStage;
-
-          const jobReference = isProjectItem
-            ? item.job.job_reference || `PROJ-${item.job.id?.slice(-4).toUpperCase() || "NEW"}`
-            : item.job.job_reference || `JOB-${item.job.id?.slice(-4).toUpperCase() || "NEW"}`;
-
-          const jobName = isProjectItem ? `${item.customer.name} - ${item.job.job_name || "Project"}` : item.customer.name;
-
-          return {
-            ...commonItem,
-            type: isProjectItem ? ("project" as const) : ("job" as const),
-            job: item.job,
-            name: jobName,
-            reference: jobReference,
-            stage: jobStage as Stage,
-            jobType: item.job?.job_type,
-            quotePrice: item.job?.quote_price,
-            agreedPrice: item.job?.agreed_price,
-            soldAmount: item.job?.sold_amount,
-            deposit1: item.job?.deposit1,
-            deposit2: item.job?.deposit2,
-            deposit1Paid: item.job?.deposit1_paid || false,
-            deposit2Paid: item.job?.deposit2_paid || false,
-            deliveryDate: item.job?.delivery_date,
-            measureDate: item.job?.measure_date,
-            salesperson: item.job?.salesperson_name || item.customer.salesperson,
-          };
-        }
-      })
-      .filter(Boolean);
-
-    if (malformedCount > 0) {
-      console.warn(
-        `⚠️ ${malformedCount} malformed items were found and promoted to 'customer' records to ensure all 78 total records are displayed.`
-      );
-    }
-
-    const filteredItems = pipelineItemsRetrieved.filter((item: PipelineItem) => canUserAccessItem(item));
-    const finalCount = filteredItems.length;
-
-    console.log(`✅ Final count after role filtering: ${finalCount}`);
-
-    setPipelineItems(filteredItems);
-    setFeatures(mapPipelineToFeatures(filteredItems));
-    prevFeaturesRef.current = mapPipelineToFeatures(filteredItems);
-  };
+      const filteredItems = pipelineItemsRetrieved.filter((item: PipelineItem) => canUserAccessItem(item));
+      
+      setPipelineItems(filteredItems);
+      
+      const mappedFeatures = mapPipelineToFeatures(filteredItems);
+      setFeatures(mappedFeatures);
+      prevFeaturesRef.current = mappedFeatures;
+    });
+  }, [mapPipelineToFeatures]);
 
 
   const handleDataChange = async (next: any[]) => {
@@ -653,75 +703,34 @@ export default function EnhancedPipelinePage() {
           updated_by: user?.email || "current_user",
         };
 
-        let response;
-        let retryCount = 0;
-        const maxRetries = 2;
-
-        while (retryCount <= maxRetries) {
-          try {
-            response = await fetchWithAuth(endpoint, {
-              method: "PATCH",
-              body: JSON.stringify(bodyData),
-            });
-            
-            if (response.ok) {
-              break; // Success, exit retry loop
-            }
-            
-            // If we get a timeout or server error, retry
-            if (response.status === 408 || response.status >= 500) {
-              retryCount++;
-              if (retryCount <= maxRetries) {
-                console.log(`⏳ Retry ${retryCount}/${maxRetries} for ${item.itemType} ${entityId}`);
-                await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2s before retry
-                continue;
-              }
-            }
-            
-            // Non-retryable error
-            const errorText = await response.text();
-            throw new Error(`Failed to update ${item.itemType} ${entityId}: ${errorText}`);
-            
-          } catch (error: any) {
-            if (error.name === 'AbortError' && retryCount < maxRetries) {
-              retryCount++;
-              console.log(`⏳ Timeout - Retry ${retryCount}/${maxRetries} for ${item.itemType} ${entityId}`);
-              await new Promise(resolve => setTimeout(resolve, 2000));
-              continue;
-            }
-            throw error;
-          }
-        }
-
-        if (!response || !response.ok) {
-          throw new Error(`Failed to update ${item.itemType} ${entityId} after ${maxRetries} retries`);
+        const response = await fetchWithAuth(endpoint, {
+          method: "PATCH",
+          body: JSON.stringify(bodyData),
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Failed to update ${item.itemType} ${entityId}`);
         }
 
         return await response.json();
       });
 
-      console.log(`⏳ Waiting for ${updatePromises.length} API calls to complete...`);
       await Promise.all(updatePromises);
       
-      console.log("🔄 Refreshing pipeline data...");
-      await refetchPipelineData();
-      console.log("✅ Pipeline data refreshed successfully");
-      console.log("=".repeat(60));
+      // ✅ DON'T REFETCH - Optimistic update is enough
+      // await refetchPipelineData();
+      
+      console.log("✅ Stage updates completed");
 
     } catch (error) {
-      console.error("=".repeat(60));
-      console.error("❌ DRAG-AND-DROP ERROR");
-      console.error("Error details:", error);
+      console.error("❌ Error updating stages:", error);
       
-      console.log("🔙 Reverting optimistic updates...");
+      // Only revert on error
       setFeatures(previousFeaturesSnapshot);
       prevFeaturesRef.current = previousFeaturesSnapshot;
       setPipelineItems(previousPipelineSnapshot);
-      console.log("✅ Reverted to previous state");
       
-      alert(
-        `Failed to update stage: ${error instanceof Error ? error.message : "Unknown error"}. Changes have been reverted.`,
-      );
+      alert(`Failed to update stage. Changes reverted.`);
     }
   };
 
@@ -889,7 +898,7 @@ export default function EnhancedPipelinePage() {
     [pipelineItems],
   );
 
-// Quick stage change handler (no confirmation dialog, direct move)
+  // Quick stage change handler (no confirmation dialog, direct move)
   const handleQuickStageChange = async (
     itemId: string,
     newStage: Stage,
@@ -1077,13 +1086,17 @@ export default function EnhancedPipelinePage() {
       return;
     }
 
-    // ✅ Open in new tab
     let url = '';
+    
     if (itemType === "customer") {
+      // For customers, go to customer details page
       url = `/dashboard/customers/${item.customer.id}`;
     } else if (itemType === "project") {
-      url = `/dashboard/customers/${item.customer.id}`;
-    } else {
+      // ✅ For projects, extract the project UUID and go to project details page
+      const projectId = itemId.replace("project-", "");
+      url = `/dashboard/projects/${projectId}`;
+    } else if (itemType === "job") {
+      // For jobs, go to job details page
       const jobId = itemId.replace("job-", "");
       url = `/dashboard/jobs/${jobId}`;
     }
@@ -1095,14 +1108,6 @@ export default function EnhancedPipelinePage() {
   const handleOpenCustomer = (customerId: string) => {
     const cleanId = customerId.replace('customer-', '');
     router.push(`/dashboard/customers/${cleanId}`);
-  };
-
-  const handleCreateJob = () => {
-    if (!permissions.canCreate) {
-      alert("You don't have permission to create new jobs.");
-      return;
-    }
-    router.push("/dashboard/jobs");
   };
 
   const handleCreateCustomer = () => {
@@ -1165,12 +1170,32 @@ export default function EnhancedPipelinePage() {
     }
   };
 
-  // Loading state
+  // Loading state with skeleton
   if (loading) {
     return (
       <div className="space-y-6 p-6">
-        <div className="flex h-64 items-center justify-center">
-          <div className="text-lg">Loading pipeline data...</div>
+        {/* Header Skeleton */}
+        <div className="flex items-center justify-between">
+          <div className="h-9 w-48 bg-gray-200 rounded animate-pulse" />
+          <div className="h-9 w-32 bg-gray-200 rounded animate-pulse" />
+        </div>
+
+        {/* Filters Skeleton */}
+        <div className="flex gap-4">
+          <div className="h-10 w-64 bg-gray-200 rounded animate-pulse" />
+          <div className="h-10 w-32 bg-gray-200 rounded animate-pulse" />
+        </div>
+
+        {/* Kanban Skeleton */}
+        <div className="flex gap-4 overflow-x-auto">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="w-[300px] flex-shrink-0 space-y-3">
+              <div className="h-12 bg-gray-200 rounded animate-pulse" />
+              <div className="h-32 bg-gray-100 rounded animate-pulse" />
+              <div className="h-32 bg-gray-100 rounded animate-pulse" />
+              <div className="h-32 bg-gray-100 rounded animate-pulse" />
+            </div>
+          ))}
         </div>
       </div>
     );
@@ -1204,9 +1229,9 @@ export default function EnhancedPipelinePage() {
           </Badge>
 
           {permissions.canCreate && (
-            <Button variant="outline" size="sm" onClick={handleCreateJob}>
-              <Plus className="mr-2 h-4 w-4" />
-              New Job
+            <Button variant="outline" size="sm" onClick={() => setIsCreateCustomerModalOpen(true)}>
+              <UserPlus className="mr-2 h-4 w-4" />
+              New Customer
             </Button>
           )}
         </div>
@@ -1306,255 +1331,272 @@ export default function EnhancedPipelinePage() {
         </TabsList>
 
         {/* Kanban View */}
-          <TabsContent value="kanban" className="mt-6">
-            <div className="h-[calc(100vh-280px)]">
-              <div
-                className="h-full overflow-x-auto overflow-y-hidden rounded-lg bg-gray-50/30"
-                // ✅ FIX 1: Ensure container width calculation is correct for horizontal scrolling
-                style={{
-                  maxWidth: "100%",
-                  width: "calc(100vw - 390px)",
-                }}
-              >
-                <div className="flex h-full items-start gap-4 p-3" style={{ width: "max-content", minWidth: "100%" }}>
-                  {/* Use visibleColumns for KanbanProvider */}
-                  <KanbanProvider
-                    columns={visibleColumns} 
-                    data={filteredFeatures}
-                    onDataChange={permissions.canDragDrop ? handleDataChange : undefined}
-                  >
-                    {(column) => (
-                      <div key={column.id} className="flex-shrink-0">
-                        <KanbanBoard
-                          id={column.id}
-                          // 🚀 FIX 2: INCREASE COLUMN WIDTH for better readability (270px -> 300px)
-                          className="flex h-full w-[300px] flex-shrink-0 flex-col rounded-lg border border-gray-200 bg-white shadow-sm md:w-[300px]"
-                        >
-                          <div className="flex h-full flex-col">
-                              <KanbanHeader className="flex-shrink-0 rounded-t-lg border-b bg-white p-2.5 sticky top-0 z-10 shadow-sm">
-                                <div className="flex items-center gap-1.5">
-                                  <div className="h-1.5 w-1.5 flex-shrink-0 rounded-full" style={{ backgroundColor: column.color }} />
-                                  <span className="text-xs font-medium">{column.name}</span>
-                                  <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
-                                    {counts[column.id] ?? 0}
-                                  </Badge>
-                                </div>
-                              </KanbanHeader>
+        <TabsContent value="kanban" className="mt-6">
+          <div className="h-[calc(100vh-280px)]">
+            <div
+              className="h-full overflow-x-auto overflow-y-hidden rounded-lg bg-gray-50/30"
+              style={{
+                maxWidth: "100%",
+                width: "calc(100vw - 390px)",
+              }}
+            >
+              <div className="flex h-full items-start gap-4 p-3" style={{ width: "max-content", minWidth: "100%" }}>
+                {/* Use visibleColumns for KanbanProvider */}
+                <KanbanProvider
+                  columns={visibleColumns} 
+                  data={filteredFeatures}
+                  onDataChange={permissions.canDragDrop ? handleDataChange : undefined}
+                >
+                  {(column) => (
+                    <div key={column.id} className="flex-shrink-0">
+                      <KanbanBoard
+                        id={column.id}
+                        className="flex h-full w-[300px] flex-shrink-0 flex-col rounded-lg border border-gray-200 bg-white shadow-sm md:w-[300px]"
+                      >
+                        <div className="flex h-full flex-col">
+                          <KanbanHeader className="flex-shrink-0 rounded-t-lg border-b bg-white p-2.5 sticky top-0 z-10 shadow-sm">
+                            <div className="flex items-center gap-1.5">
+                              <div className="h-1.5 w-1.5 flex-shrink-0 rounded-full" style={{ backgroundColor: column.color }} />
+                              <span className="text-xs font-medium">{column.name}</span>
+                              <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                                {counts[column.id] ?? 0}
+                              </Badge>
+                            </div>
+                          </KanbanHeader>
 
-                              <KanbanCards id={column.id} className="flex-1 space-y-2 overflow-y-auto p-2" style={{ maxHeight: 'calc(100vh - 380px)' }}>
-                                {(feature: any) => {
-                                  const isEditable = canUserEditItem({
-                                    id: feature.itemId,
-                                    type: feature.itemType,
-                                    customer: feature.customer,
-                                    job: feature.job,
-                                    reference: feature.reference,
-                                    name: feature.customer.name,
-                                    stage: feature.stage,
-                                    jobType: feature.jobType,
-                                    salesperson: feature.salesperson,
-                                  } as PipelineItem);
+                          <KanbanCards id={column.id} className="flex-1 space-y-2 overflow-y-auto p-2" style={{ maxHeight: 'calc(100vh - 380px)' }}>
+                            {(feature: any) => {
+                              const isEditable = canUserEditItem({
+                                id: feature.itemId,
+                                type: feature.itemType,
+                                customer: feature.customer,
+                                job: feature.job,
+                                reference: feature.reference,
+                                name: feature.customer.name,
+                                stage: feature.stage,
+                                jobType: feature.jobType,
+                                salesperson: feature.salesperson,
+                              } as PipelineItem);
 
-                                  return (
-                                    <KanbanCard
-                                      column={column.id}
-                                      id={feature.id}
-                                      key={feature.id}
-                                      name={feature.name}
-                                      className={`rounded-md border border-gray-200 bg-white shadow-sm transition-shadow hover:shadow-md ${permissions.canDragDrop && isEditable ? "cursor-grab" : "cursor-not-allowed opacity-90"} p-2 ${feature.itemType === "job" ? "pb-0" : ""} overflow-hidden`}
-                                      style={{ maxWidth: '100%', wordBreak: 'break-word' }}
-                                    >
-                                      <div className="space-y-3">
-                                        {/* Lock icon for non-editable items */}
-                                        {!isEditable && (
-                                          <div className="absolute top-1 right-1">
-                                            <Lock className="h-3 w-3 text-gray-400" />
-                                          </div>
-                                        )}
+                              // Get color scheme based on project type
+                              const colorScheme = getProjectTypeColor(feature.jobType);
+                              
+                              // Calculate days in stage
+                              const daysInStage = calculateDaysInStage(feature.customer.created_at);
 
-                                        {/* Header */}
-                                        <div className="flex items-start justify-between gap-2">
-                                          <div className="min-w-0 flex-1 pr-2">
-                                            <p className="text-sm font-semibold break-words text-black">
-                                              {feature.customer.name}
-                                            </p>
-
-                                            {/* Show reference below customer name for both types */}
-                                            <div className="mt-0.5 flex items-center gap-1 text-xs text-gray-500">
-                                              <span className="truncate">{feature.reference}</span>
-                                            </div>
-
-                                            {/* ✅ NEW: Project Count Badge - only for customers with multiple projects */}
-                                            {feature.itemType === "customer" && feature.project_count > 1 && (
-                                              <div className="mt-1 flex items-center gap-1">
-                                                <Badge variant="secondary" className="text-[10px] px-1.5 py-0.5 flex items-center gap-1">
-                                                  <FolderOpen className="h-2.5 w-2.5" />
-                                                  <span>{feature.project_count} projects</span>
-                                                </Badge>
-                                              </div>
-                                            )}
-                                          </div>
-
-                                          <div className="flex flex-shrink-0 flex-col gap-1">
-                                            {/* Render each job/project type as its own badge */}
-                                            {feature.jobType &&
-                                              feature.jobType.split(",").map((t: string, i: number) => (
-                                                <Badge key={i} variant="outline" className="text-xs whitespace-nowrap">
-                                                  {t.trim()}
-                                                </Badge>
-                                              ))}
-                                          </div>
-                                        </div>
-
-                                        {/* Contact Info - only show if available */}
-                                        {(feature.customer.phone || feature.customer.email || feature.customer.address) && (
-                                          <div className="text-muted-foreground space-y-1 text-xs">
-                                            {feature.customer.phone && (
-                                              <div className="flex items-center gap-2">
-                                                <Phone className="h-3 w-3 flex-shrink-0" />
-                                                <span className="truncate">{feature.customer.phone}</span>
-                                              </div>
-                                            )}
-                                            {feature.customer.email && (
-                                              <div className="flex items-center gap-2">
-                                                <Mail className="h-3 w-3 flex-shrink-0" />
-                                                <span className="truncate">{feature.customer.email}</span>
-                                              </div>
-                                            )}
-                                            {feature.customer.address && (
-                                              <div className="flex items-center gap-2">
-                                                <MapPin className="h-3 w-3 flex-shrink-0" />
-                                                <span className="truncate">{feature.customer.address}</span>
-                                              </div>
-                                            )}
-                                          </div>
-                                        )}
-
-                                        {/* Job Details - conditional rendering based on available data and permissions */}
-                                        <div className="space-y-2 text-xs">
-                                          {feature.salesperson && (
-                                            <div className="flex items-center gap-2">
-                                              <Users className="text-muted-foreground h-3 w-3 flex-shrink-0" />
-                                              <span className="truncate">{feature.salesperson}</span>
-                                            </div>
-                                          )}
-                                          {feature.measureDate && (
-                                            <div className="flex items-center gap-2">
-                                              <Calendar className="text-muted-foreground h-3 w-3 flex-shrink-0" />
-                                              <span className="truncate">Measure: {formatDate(feature.measureDate)}</span>
-                                            </div>
-                                          )}
-
-                                          {/* Financial information - only show if user has permission */}
-                                          {permissions.canViewFinancials && (
-                                            <>
-                                              {feature.quotePrice && (
-                                                <div className="flex items-center gap-2">
-                                                  <DollarSign className="text-muted-foreground h-3 w-3 flex-shrink-0" />
-                                                  <span className="truncate">Quote: £{feature.quotePrice.toFixed(2)}</span>
-                                                </div>
-                                              )}
-                                              {feature.agreedPrice && (
-                                                <div className="flex items-center gap-2">
-                                                  <Check className="h-3 w-3 flex-shrink-0 text-green-500" />
-                                                  <span className="truncate">Agreed: £{feature.agreedPrice.toFixed(2)}</span>
-                                                </div>
-                                              )}
-                                              {feature.soldAmount && (
-                                                <div className="flex items-center gap-2">
-                                                  <Check className="h-3 w-3 flex-shrink-0 text-green-500" />
-                                                  <span className="truncate">Sold: £{feature.soldAmount.toFixed(2)}</span>
-                                                </div>
-                                              )}
-                                              {feature.deposit1 && (
-                                                <div className="flex items-center gap-2">
-                                                  <div
-                                                    className={`h-2 w-2 flex-shrink-0 rounded-full ${feature.deposit1Paid ? "bg-green-500" : "bg-red-500"}`}
-                                                  />
-                                                  <span className="truncate">Deposit 1: £{feature.deposit1.toFixed(2)}</span>
-                                                </div>
-                                              )}
-                                              {feature.deposit2 && (
-                                                <div className="flex items-center gap-2">
-                                                  <div
-                                                    className={`h-2 w-2 flex-shrink-0 rounded-full ${feature.deposit2Paid ? "bg-green-500" : "bg-red-500"}`}
-                                                  />
-                                                  <span className="truncate">Deposit 2: £{feature.deposit2.toFixed(2)}</span>
-                                                </div>
-                                              )}
-                                            </>
-                                          )}
-
-                                          {feature.deliveryDate && (
-                                            <div className="flex items-center gap-2">
-                                              <Calendar className="text-muted-foreground h-3 w-3 flex-shrink-0" />
-                                              <span className="truncate">Delivery: {formatDate(feature.deliveryDate)}</span>
-                                            </div>
-                                          )}
-                                        </div>
-
-                                        {/* Action Buttons (fixed to the bottom with padding) */}
-                                        <div className="flex gap-1 pt-2 pb-1">
-                                          {/* ✅ MODIFIED: Quick Reject Button - now instant on click */}
-                                          {isEditable && feature.stage !== "Rejected" && (
-                                            <Button
-                                              size="sm"
-                                              variant="ghost"
-                                              className="h-6 flex-1 px-1 text-xs hover:bg-red-50 text-red-600"
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                handleQuickStageChange(feature.itemId, "Rejected", feature.itemType);
-                                              }}
-                                              title="Move to Rejected"
-                                            >
-                                              <X className="h-3 w-3" />
-                                            </Button>
-                                          )}
-                                          
-                                          {/* Eye button - always visible */}
-                                          <Button
-                                            size="sm"
-                                            variant="ghost"
-                                            className="h-6 flex-1 px-1 text-xs hover:bg-gray-100"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              handleOpenItem(feature.itemId, feature.itemType);
-                                            }}
-                                            title={`Open ${feature.itemType === "customer" ? "Customer" : feature.itemType === "project" ? "Project" : "Job"}`}
-                                          >
-                                            <Eye className="h-3 w-3" />
-                                          </Button>
-
-                                          {/* Documents button - keep for jobs/projects */}
-                                          {/* {(feature.itemType === "job" || feature.itemType === "project") && (
-                                            <Button
-                                              size="sm"
-                                              variant="ghost"
-                                              className="h-6 flex-1 px-1 text-xs hover:bg-gray-100"
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                handleViewDocuments(feature.itemId);
-                                              }}
-                                              title="View Documents"
-                                            >
-                                              <File className="h-3 w-3" />
-                                            </Button>
-                                          )} */}
-                                        </div>
+                              return (
+                                <KanbanCard
+                                  column={column.id}
+                                  id={feature.id}
+                                  key={feature.id}
+                                  name={feature.name}
+                                  className={`rounded-md border-2 ${colorScheme.border} ${colorScheme.bg} shadow-sm transition-all hover:shadow-md ${permissions.canDragDrop && isEditable ? "cursor-grab active:cursor-grabbing" : "cursor-not-allowed opacity-90"} p-3 overflow-hidden relative min-h-fit`}
+                                  style={{ maxWidth: '100%', wordBreak: 'break-word' }}
+                                >
+                                  <div className="space-y-2.5">
+                                    {/* Lock icon for non-editable items */}
+                                    {!isEditable && (
+                                      <div className="absolute top-2 right-2">
+                                        <Lock className="h-3 w-3 text-gray-400" />
                                       </div>
-                                    </KanbanCard>
-                                  );
-                                }}
-                              </KanbanCards>
-                          </div>
-                        </KanbanBoard>
-                      </div>
-                    )}
-                  </KanbanProvider>
-                </div>
-                </div>
+                                    )}
+
+                                    {/* Project Type Badge(s) - AT THE TOP */}
+                                    {feature.jobType && (
+                                      <div className="flex flex-wrap gap-1.5 mb-1">
+                                        {feature.jobType.split(",").map((type: string, i: number) => {
+                                          const typeColor = getProjectTypeColor(type.trim());
+                                          return (
+                                            <Badge 
+                                              key={i} 
+                                              className={`text-xs font-semibold ${typeColor.badge} border`}
+                                            >
+                                              {type.trim()}
+                                            </Badge>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+
+                                    {/* Customer Name - Large and Bold */}
+                                    <div className="pr-6">
+                                      <h3 className={`text-base font-bold leading-tight ${colorScheme.text}`}>
+                                        {feature.customer.name}
+                                      </h3>
+                                      
+                                      {/* Reference below name */}
+                                      <div className="mt-1 flex items-center gap-1.5 text-xs text-gray-600">
+                                        <span className="font-medium">{feature.reference}</span>
+                                      </div>
+
+                                      {/* Date Added and Days in Stage */}
+                                      {feature.customer.created_at && (
+                                        <div className="mt-1.5 space-y-0.5">
+                                          <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                                            <Calendar className="h-3 w-3 flex-shrink-0" />
+                                            <span>Added: {formatDate(feature.customer.created_at)}</span>
+                                          </div>
+                                          <div className="flex items-center gap-1.5 text-xs">
+                                            <Clock className="h-3 w-3 flex-shrink-0 text-orange-500" />
+                                            <span className="font-medium text-orange-600">
+                                              {daysInStage} {daysInStage === 1 ? 'day' : 'days'} in {feature.stage}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {/* Project Name (if it's a project item) */}
+                                    {feature.itemType === "project" && feature.job?.job_name && (
+                                      <div className={`text-sm font-semibold ${colorScheme.text} flex items-center gap-1.5`}>
+                                        <Briefcase className="h-3.5 w-3.5 flex-shrink-0" />
+                                        <span>{feature.job.job_name}</span>
+                                      </div>
+                                    )}
+
+                                    {/* Project Count Badge - only for customers with multiple projects */}
+                                    {feature.itemType === "customer" && feature.project_count > 1 && (
+                                      <div className="flex items-center gap-1">
+                                        <Badge variant="secondary" className="text-xs px-2 py-0.5 flex items-center gap-1 bg-white/80 border border-gray-300">
+                                          <FolderOpen className="h-3 w-3" />
+                                          <span>{feature.project_count} projects</span>
+                                        </Badge>
+                                      </div>
+                                    )}
+
+                                    {/* Contact Info */}
+                                    {(feature.customer.phone || feature.customer.email || feature.customer.address) && (
+                                      <div className="space-y-1 text-xs text-gray-600">
+                                        {feature.customer.phone && (
+                                          <div className="flex items-center gap-2">
+                                            <Phone className="h-3 w-3 flex-shrink-0 text-gray-500" />
+                                            <span className="truncate">{feature.customer.phone}</span>
+                                          </div>
+                                        )}
+                                        {feature.customer.email && (
+                                          <div className="flex items-center gap-2">
+                                            <Mail className="h-3 w-3 flex-shrink-0 text-gray-500" />
+                                            <span className="truncate">{feature.customer.email}</span>
+                                          </div>
+                                        )}
+                                        {feature.customer.address && (
+                                          <div className="flex items-center gap-2">
+                                            <MapPin className="h-3 w-3 flex-shrink-0 text-gray-500" />
+                                            <span className="truncate">{feature.customer.address}</span>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+
+                                    {/* Job Details */}
+                                    <div className="space-y-1 text-xs">
+                                      {feature.salesperson && (
+                                        <div className="flex items-center gap-2">
+                                          <Users className="h-3 w-3 flex-shrink-0 text-gray-500" />
+                                          <span className="truncate text-gray-700">{feature.salesperson}</span>
+                                        </div>
+                                      )}
+                                      {feature.measureDate && (
+                                        <div className="flex items-center gap-2">
+                                          <Calendar className="h-3 w-3 flex-shrink-0 text-gray-500" />
+                                          <span className="text-gray-700">Measure: {formatDate(feature.measureDate)}</span>
+                                        </div>
+                                      )}
+
+                                      {/* Financial information - only show if user has permission */}
+                                      {permissions.canViewFinancials && (
+                                        <>
+                                          {feature.quotePrice && (
+                                            <div className="flex items-center gap-2">
+                                              <DollarSign className="h-3 w-3 flex-shrink-0 text-gray-500" />
+                                              <span className="text-gray-700">Quote: £{feature.quotePrice.toFixed(2)}</span>
+                                            </div>
+                                          )}
+                                          {feature.agreedPrice && (
+                                            <div className="flex items-center gap-2">
+                                              <Check className="h-3 w-3 flex-shrink-0 text-green-500" />
+                                              <span className="text-gray-700">Agreed: £{feature.agreedPrice.toFixed(2)}</span>
+                                            </div>
+                                          )}
+                                          {feature.soldAmount && (
+                                            <div className="flex items-center gap-2">
+                                              <Check className="h-3 w-3 flex-shrink-0 text-green-500" />
+                                              <span className="text-gray-700">Sold: £{feature.soldAmount.toFixed(2)}</span>
+                                            </div>
+                                          )}
+                                          {feature.deposit1 && (
+                                            <div className="flex items-center gap-2">
+                                              <div
+                                                className={`h-2 w-2 flex-shrink-0 rounded-full ${feature.deposit1Paid ? "bg-green-500" : "bg-red-500"}`}
+                                              />
+                                              <span className="text-gray-700">Deposit 1: £{feature.deposit1.toFixed(2)}</span>
+                                            </div>
+                                          )}
+                                          {feature.deposit2 && (
+                                            <div className="flex items-center gap-2">
+                                              <div
+                                                className={`h-2 w-2 flex-shrink-0 rounded-full ${feature.deposit2Paid ? "bg-green-500" : "bg-red-500"}`}
+                                              />
+                                              <span className="text-gray-700">Deposit 2: £{feature.deposit2.toFixed(2)}</span>
+                                            </div>
+                                          )}
+                                        </>
+                                      )}
+
+                                      {feature.deliveryDate && (
+                                        <div className="flex items-center gap-2">
+                                          <Calendar className="h-3 w-3 flex-shrink-0 text-gray-500" />
+                                          <span className="text-gray-700">Delivery: {formatDate(feature.deliveryDate)}</span>
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {/* Action Buttons */}
+                                    <div className="flex gap-1 pt-2">
+                                      {/* Quick Reject Button */}
+                                      {isEditable && feature.stage !== "Rejected" && (
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          className="h-6 flex-1 px-1 text-xs hover:bg-red-100 text-red-600 bg-white/50"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleQuickStageChange(feature.itemId, "Rejected", feature.itemType);
+                                          }}
+                                          title="Move to Rejected"
+                                        >
+                                          <X className="h-3 w-3" />
+                                        </Button>
+                                      )}
+                                      
+                                      {/* View Button */}
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="h-6 flex-1 px-1 text-xs hover:bg-gray-200 bg-white/50"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleOpenItem(feature.itemId, feature.itemType);
+                                        }}
+                                        title={`Open ${feature.itemType === "customer" ? "Customer" : feature.itemType === "project" ? "Project" : "Job"}`}
+                                      >
+                                        <Eye className="h-3 w-3" />
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </KanbanCard>
+                              );
+                            }}
+                          </KanbanCards>
+                        </div>
+                      </KanbanBoard>
+                    </div>
+                  )}
+                </KanbanProvider>
+              </div>
             </div>
-          </TabsContent>
+          </div>
+        </TabsContent>
 
         {/* List View - updated to handle both customers and jobs */}
         <TabsContent value="list" className="mt-6">
@@ -1581,6 +1623,7 @@ export default function EnhancedPipelinePage() {
             {/* Table Rows */}
             {filteredListItems.map((item) => {
               const isEditable = canUserEditItem(item);
+              const daysInStage = calculateDaysInStage(item.customer.created_at);
 
               return (
                 <Card
@@ -1608,6 +1651,13 @@ export default function EnhancedPipelinePage() {
                       )}
                       {item.customer.address && (
                         <div className="text-muted-foreground truncate text-xs">{item.customer.address}</div>
+                      )}
+                      {/* Days in Stage in List View */}
+                      {item.customer.created_at && (
+                        <div className="mt-1 flex items-center gap-1 text-xs text-orange-600">
+                          <Clock className="h-3 w-3" />
+                          <span className="font-medium">{daysInStage} {daysInStage === 1 ? 'day' : 'days'} in {item.stage}</span>
+                        </div>
                       )}
                     </div>
                     <div>{item.jobType && <Badge variant="outline">{item.jobType}</Badge>}</div>
@@ -1662,13 +1712,6 @@ export default function EnhancedPipelinePage() {
                                 Schedule
                               </DropdownMenuItem>
                             )}
-                          
-                          {/* {(item.type === "job" || item.type === "project") && (
-                            <DropdownMenuItem onClick={() => handleViewDocuments(item.id)}>
-                              <File className="mr-2 h-4 w-4" />
-                              View Documents
-                            </DropdownMenuItem>
-                          )} */}
                           
                           {/* NEW: Change Stage submenu - shows all available stages */}
                           {permissions.canEdit && isEditable && (
@@ -1811,6 +1854,16 @@ export default function EnhancedPipelinePage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Create Customer Modal */}
+      <CreateCustomerModal
+        isOpen={isCreateCustomerModalOpen}
+        onClose={() => setIsCreateCustomerModalOpen(false)}
+        onCustomerCreated={async () => {
+          // Refetch pipeline data after customer is created
+          await refetchPipelineData();
+        }}
+      />
     </div>
   );
 }

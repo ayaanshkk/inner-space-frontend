@@ -639,7 +639,7 @@ export default function SchedulePage() {
       
       console.log(`🗑️ Deleting task: ${id}`);
       
-      const response = await fetch(`https://aztec-interior.onrender.com/assignments/${id}`, {
+      const response = await fetch(`http://localhost:5000/assignments/${id}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`,
