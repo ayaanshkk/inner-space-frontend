@@ -29,7 +29,7 @@ function redirectToLogin() {
 }
 
 // ✅ Helper to add timeout to fetch calls
-async function fetchWithTimeout(url: string, options: RequestInit = {}, timeout = 60000) { // ✅ Increased to 60s for Render spin-up
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeout = 60000) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
   
@@ -69,45 +69,47 @@ export async function fetchPublic(path: string, options: RequestInit = {}) {
 }
 
 /**
- * Helper function to make authenticated API calls
+ * Helper function to make authenticated API calls (or optional auth)
  * Used for data endpoints - calls external local backend (localhost:5000)
  */
 export async function fetchWithAuth(path: string, options: RequestInit = {}) {
-  // NOTE: Still using localStorage for token, which is fine for local dev
   const token = localStorage.getItem("auth_token");
 
   const url = `${DATA_API_ROOT}${path.startsWith("/") ? "" : "/"}${path}`;
 
   console.log('📡 fetchWithAuth calling:', url);
 
-  if (!token) {
+  // ✅ For drawing-analyser, make auth optional (since mock user is set in backend)
+  const requiresAuth = !path.includes('/api/drawing-analyser');
+
+  if (!token && requiresAuth) {
     console.error("No auth token found");
-    // redirectToLogin();
     throw new Error("Not authenticated");
   }
 
-  const headers = {
+  const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${token}`,
-    ...options.headers,
+    ...(options.headers as Record<string, string> || {}),
   };
 
+  // Add auth header if token exists
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   try {
-    // ✅ Increased timeout to 60 seconds for backend operations (Render spin-up)
     const response = await fetchWithTimeout(url, {
       ...options,
       headers,
     }, 60000);
 
-    // ✅ Handle 401 - redirect to login (real auth)
-    if (response.status === 401) {
+    if (response.status === 401 && requiresAuth) {
       console.error("🔒 Unauthorized - token invalid or expired");
       localStorage.removeItem("auth_token");
       redirectToLogin();
       throw new Error("Unauthorized - please log in again");
     }
 
-    // Return the actual response
     return response;
   } catch (error: any) {
     if (error.name === 'AbortError') {
@@ -166,10 +168,69 @@ export const api = {
     return handleApiResponse(response);
   },
 
+  // GENERIC HTTP METHODS
+  async get(path: string, options: RequestInit = {}) {
+    try {
+      const response = await fetchWithAuth(path, {
+        ...options,
+        method: "GET",
+      });
+      return handleApiResponse(response);
+    } catch (error: any) {
+      console.error('API GET error:', {
+        path,
+        error: error.message,
+        name: error.name
+      });
+      
+      // ✅ Return empty data for drawing list endpoint to prevent crash
+      if (path.includes('/api/drawing-analyser') && !path.includes('/upload')) {
+        console.warn('⚠️ Drawing analyser GET failed, returning empty data');
+        return { drawings: [], total: 0, limit: 50, offset: 0 };
+      }
+      
+      throw error;
+    }
+  },
+
+  async post(path: string, data?: any, options: RequestInit = {}) {
+    const response = await fetchWithAuth(path, {
+      ...options,
+      method: "POST",
+      body: data ? JSON.stringify(data) : undefined,
+    });
+    return handleApiResponse(response);
+  },
+
+  async put(path: string, data?: any, options: RequestInit = {}) {
+    const response = await fetchWithAuth(path, {
+      ...options,
+      method: "PUT",
+      body: data ? JSON.stringify(data) : undefined,
+    });
+    return handleApiResponse(response);
+  },
+
+  async patch(path: string, data?: any, options: RequestInit = {}) {
+    const response = await fetchWithAuth(path, {
+      ...options,
+      method: "PATCH",
+      body: data ? JSON.stringify(data) : undefined,
+    });
+    return handleApiResponse(response);
+  },
+
+  async delete(path: string, options: RequestInit = {}) {
+    const response = await fetchWithAuth(path, {
+      ...options,
+      method: "DELETE",
+    });
+    return handleApiResponse(response);
+  },
+
   // DATA ENDPOINTS (use fetchWithAuth - calls Flask backend on localhost:5000)
   async getCustomers() {
     try {
-      // fetchWithAuth now returns a 200 OK response (array []) if the backend sends a 401
       const response = await fetchWithAuth("/customers"); 
       return await handleApiResponse(response);
     } catch (error) {
@@ -191,7 +252,6 @@ export const api = {
   async getPipeline() {
     try {
       const response = await fetchWithAuth("/pipeline");
-      // This will successfully return an empty array [] if 401, preventing the .filter/.map crash.
       return await handleApiResponse(response);
     } catch (error) {
       console.warn("⚠️ getPipeline failed, returning empty data");

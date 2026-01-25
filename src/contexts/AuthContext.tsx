@@ -39,6 +39,7 @@ interface AuthContextType {
   register: (userData: RegisterData) => Promise<{ success: boolean; error?: string }>;
   updateUser: (userData: Partial<User>) => void;
   checkAuth: () => Promise<boolean>;
+  getAuthHeaders: () => HeadersInit; // ✅ NEW: Helper to get auth headers
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -75,7 +76,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.removeItem("auth_token");
     localStorage.removeItem("auth_user");
     localStorage.removeItem("user_role");
-    deleteCookie("auth-token"); // ✅ Clear cookie
+    deleteCookie("auth-token");
   }, []);
 
   // ✅ Initialize auth state from localStorage - ONLY RUN ONCE
@@ -91,17 +92,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const parsedUser = JSON.parse(storedUser);
           setToken(storedToken);
           setUser(parsedUser);
-          localStorage.setItem("user_role", parsedUser.role); // ✅ ADD THIS LINE
+          localStorage.setItem("user_role", parsedUser.role);
           setCookie("auth-token", storedToken, 7);
           console.log("Auth state restored from localStorage");
         }
       } catch (error) {
         console.error("Error initializing auth:", error);
-        setUser(null);
-        setToken(null);
-        localStorage.removeItem("auth_token");
-        localStorage.removeItem("auth_user");
-        deleteCookie("auth-token");
+        clearAuth();
       } finally {
         console.log("Auth initialization complete");
         setLoading(false);
@@ -109,7 +106,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     initAuth();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ✅ LOGIN - Sets both localStorage AND cookie
   const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
@@ -131,7 +128,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       console.log("📡 Login response:", { status: response.status, data });
 
-      if (response.ok) {
+      if (response.ok && data.token && data.user) {
         console.log("✅ Login successful, setting auth state...");
         setToken(data.token);
         setUser(data.user);
@@ -139,7 +136,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // ✅ Save to localStorage
         localStorage.setItem("auth_token", data.token);
         localStorage.setItem("auth_user", JSON.stringify(data.user));
-        localStorage.setItem("user_role", data.user.role); // ✅ ADD THIS LINE
+        localStorage.setItem("user_role", data.user.role);
 
         // ✅ Save to cookie (for middleware)
         setCookie("auth-token", data.token, 7);
@@ -228,6 +225,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // ✅ NEW: Helper function to get auth headers for any request
+  const getAuthHeaders = useCallback((): HeadersInit => {
+    const currentToken = token || localStorage.getItem("auth_token");
+    
+    if (!currentToken) {
+      console.warn("⚠️ No token available for authentication");
+      return {};
+    }
+
+    return {
+      "Authorization": `Bearer ${currentToken}`,
+    };
+  }, [token]);
+
   const value = {
     user,
     token,
@@ -237,6 +248,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     register,
     updateUser,
     checkAuth,
+    getAuthHeaders, // ✅ Export the helper
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

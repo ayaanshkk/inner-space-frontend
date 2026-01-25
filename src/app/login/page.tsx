@@ -11,13 +11,13 @@ export default function LoginV2Enhanced() {
       <div className="bg-primary hidden lg:block lg:w-1/3">
         <div className="flex h-full flex-col items-center justify-center p-12 text-center">
           <div className="space-y-6">
-            <Image
+            {/* <Image
               src="/images/file1.svg"
               alt="Logo"
               width={80}
               height={80}
               className="mx-auto"
-            />
+            /> */}
             <div className="space-y-2">
               <h1 className="text-primary-foreground text-5xl font-light">Hello again</h1>
               <p className="text-primary-foreground/80 text-xl">Login to continue</p>
