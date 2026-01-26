@@ -3,12 +3,12 @@
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || '';
 
 // FIXED: Converted the backend link to use localhost:5000 to match the Flask server
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'}";
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
 
 // Auth uses Next.js API routes (targets http://localhost:3000/api)
 const AUTH_API_ROOT = `${BASE_PATH}/api`;
 
-// Data uses external backend (targets ${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'})
+// Data uses external backend (targets http://localhost:5000)
 const DATA_API_ROOT = BACKEND_URL;
 
 // 🔍 DEBUG: Log the configuration BEFORE the window check
