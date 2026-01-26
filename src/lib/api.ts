@@ -11,6 +11,13 @@ const AUTH_API_ROOT = `${BASE_PATH}/api`;
 // Data uses external backend (targets http://localhost:5000)
 const DATA_API_ROOT = BACKEND_URL;
 
+// 🔍 DEBUG: Log the configuration BEFORE the window check
+console.log('🔍 Environment Check:', {
+  'process.env.NEXT_PUBLIC_BACKEND_URL': process.env.NEXT_PUBLIC_BACKEND_URL,
+  'BACKEND_URL': BACKEND_URL,
+  'DATA_API_ROOT': DATA_API_ROOT,
+});
+
 // 🔍 DEBUG: Log the configuration
 if (typeof window !== 'undefined') {
   console.log('🌐 API Configuration:', {
