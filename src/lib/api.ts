@@ -147,8 +147,11 @@ async function handleApiResponse(response: Response) {
 export const api = {
   // AUTH ENDPOINTS (use fetchPublic - calls Next.js API routes on localhost:3000)
   async login(email: string, password: string) {
-    const response = await fetchPublic("/auth/login", {
+    const response = await fetch(`${DATA_API_ROOT}/auth/login`, {
       method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({ email, password }),
     });
     return handleApiResponse(response);
