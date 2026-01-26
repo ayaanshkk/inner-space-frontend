@@ -45,7 +45,7 @@ export function CustomerProjectTimeline({ customerId }: { customerId: string }) 
       console.log(`🔍 Fetching timeline for customer ${customerId}...`);
       
       const response = await fetch(
-        `http://localhost:5000/materials/timeline/${customerId}`,
+        `${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'}/materials/timeline/${customerId}`,
         {
           headers: {
             'Authorization': `Bearer ${token}`,

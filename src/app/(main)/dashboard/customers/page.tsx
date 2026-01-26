@@ -27,7 +27,7 @@ import { CustomerProjectTimeline } from "@/components/materials/CustomerProjectT
 import { useAuth } from "@/contexts/AuthContext";
 
 // ✅ CENTRALIZED API CONFIGURATION
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'}";
 
 // ---------------- Constants ----------------
 const CUSTOMERS_PER_PAGE = 25;

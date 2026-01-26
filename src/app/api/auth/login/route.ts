@@ -1,7 +1,7 @@
 // src/app/api/auth/login/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || '${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'}';
 
 export async function POST(request: NextRequest) {
   try {

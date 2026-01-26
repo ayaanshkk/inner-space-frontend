@@ -81,7 +81,7 @@ export default function JobsPage() {
 
       while (retryCount <= maxRetries) {
         try {
-          response = await fetch("http://localhost:5000/jobs", {
+          response = await fetch("${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'}/jobs", {
             headers,
             signal: AbortSignal.timeout(15000), // 15 second timeout
           });

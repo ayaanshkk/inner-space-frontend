@@ -455,7 +455,7 @@ export default function EnhancedPipelinePage() {
         const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
 
         const pipelineResponse = await fetch(
-          "http://localhost:5000/pipeline",
+          "${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'}/pipeline",
           {
             headers: {
               "Authorization": `Bearer ${token}`,

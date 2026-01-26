@@ -103,7 +103,7 @@ export default function DrawingAnalyserPage() {
       // ✅ Get auth headers from context
       const authHeaders = getAuthHeaders();
       
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || '${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'}';
       const uploadUrl = `${apiUrl}/api/drawing-analyser/upload`;
       
       console.log('📤 Uploading to:', uploadUrl);
