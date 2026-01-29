@@ -26,8 +26,8 @@ import { CreateCustomerModal } from "@/components/ui/CreateCustomerModal";
 import { CustomerProjectTimeline } from "@/components/materials/CustomerProjectTimeline";
 import { useAuth } from "@/contexts/AuthContext";
 
-// ✅ CENTRALIZED API CONFIGURATION
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'}";
+// ✅ BACKEND URL CONFIGURATION - THIS WAS MISSING!
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
 
 // ---------------- Constants ----------------
 const CUSTOMERS_PER_PAGE = 25;
@@ -183,18 +183,13 @@ export default function CustomersPage() {
       const token = localStorage.getItem("auth_token");
       const headers: HeadersInit = { Authorization: `Bearer ${token}` };
 
-      console.log("🔄 Fetching customers from:", BACKEND_URL);
+      console.log("🔄 Fetching customers...");
       
       const response = await fetch(`${BACKEND_URL}/customers`, {
         headers,
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        const errorMessage = `Failed to fetch customers (Status: ${response.status} ${response.statusText}). Server Response: ${errorText}`;
-        console.error("🚨 API Fetch Error:", errorMessage);
-        throw new Error(errorMessage);
-      }
+      if (!response.ok) throw new Error("Failed to fetch customers");
 
       const data = await response.json();
 
@@ -280,17 +275,54 @@ export default function CustomersPage() {
     }
   };
 
-  // ✅ STEP 1: Apply role-based filtering FIRST
+  // ✅ STEP 1: Apply role-based filtering FIRST with comprehensive debugging
   const roleFilteredCustomers = useMemo(() => {
     if (user?.role === "Sales") {
+      console.log("🔍 Sales Role Filter Debug:");
+      console.log("- User ID:", user.id, "Type:", typeof user.id);
+      console.log("- User Name:", user.name);
+      console.log("- Total Customers:", allCustomers.length);
+      
       const filtered = allCustomers.filter((customer: Customer) => {
-        const matchesCreatedBy = customer.created_by === String(user.id);
-        const matchesSalesperson = customer.salesperson === user.name;
-        return matchesCreatedBy || matchesSalesperson;
+        // Normalize values for comparison
+        const customerCreatedBy = String(customer.created_by || "").trim();
+        const userId = String(user.id || "").trim();
+        const matchesCreatedBy = customerCreatedBy === userId;
+        
+        const customerSalesperson = String(customer.salesperson || "").trim();
+        const userName = String(user.name || "").trim();
+        // Case-insensitive comparison for salesperson name
+        const matchesSalesperson = customerSalesperson.toLowerCase() === userName.toLowerCase();
+        
+        const isVisible = matchesCreatedBy || matchesSalesperson;
+        
+        // Log first 5 customers for debugging
+        if (allCustomers.indexOf(customer) < 5) {
+          console.log(`\nCustomer: ${customer.name}`);
+          console.log(`  - created_by: "${customer.created_by}" (type: ${typeof customer.created_by})`);
+          console.log(`  - salesperson: "${customer.salesperson}"`);
+          console.log(`  - matchesCreatedBy: ${matchesCreatedBy} ("${customerCreatedBy}" === "${userId}")`);
+          console.log(`  - matchesSalesperson: ${matchesSalesperson} ("${customerSalesperson.toLowerCase()}" === "${userName.toLowerCase()}")`);
+          console.log(`  - isVisible: ${isVisible}`);
+        }
+        
+        return isVisible;
       });
-      console.log(`👤 Sales filter: ${filtered.length} customers visible to ${user.name}`);
+      
+      console.log(`\n✅ Sales filter result: ${filtered.length} customers visible to ${user.name}`);
+      if (filtered.length > 0) {
+        console.log("Visible customers:", filtered.map(c => c.name));
+      } else {
+        console.warn("⚠️ NO CUSTOMERS VISIBLE - Check if:");
+        console.warn("  1. Customer created_by matches user ID");
+        console.warn("  2. Customer salesperson matches user name");
+        console.warn("  3. Data types are consistent (all strings)");
+      }
+      
       return filtered;
     }
+    
+    console.log(`✅ Non-Sales role (${user?.role}): Showing all ${allCustomers.length} customers`);
     return allCustomers;
   }, [allCustomers, user]);
 
@@ -353,7 +385,11 @@ export default function CustomersPage() {
   const canEditCustomer = (customer: Customer): boolean => {
     if (user?.role === "Manager" || user?.role === "HR") return true;
     if (user?.role === "Sales") {
-      return customer.created_by === String(user.id) || customer.salesperson === user.name;
+      const customerCreatedBy = String(customer.created_by || "").trim();
+      const userId = String(user.id || "").trim();
+      const customerSalesperson = String(customer.salesperson || "").trim().toLowerCase();
+      const userName = String(user.name || "").trim().toLowerCase();
+      return customerCreatedBy === userId || customerSalesperson === userName;
     }
     return false;
   };

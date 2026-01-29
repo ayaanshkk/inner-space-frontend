@@ -5,13 +5,14 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { api } from '@/lib/api';
-import { useAuth } from '@/contexts/AuthContext'; // ✅ Added
+import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Input } from '@/components/ui/input';
-import { Upload, FileText, Loader2, Download, Trash2, Scissors, AlertCircle, Edit2, Save, X } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Upload, FileText, Loader2, Download, Trash2, Scissors, AlertCircle, Edit2, Save, X, ArrowLeft, Image as ImageIcon } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface CuttingListItem {
@@ -38,6 +39,7 @@ interface Drawing {
   total_area_m2: number;
   confidence?: number;
   created_at: string;
+  preview_url?: string;
 }
 
 const COMPONENT_GROUPS = {
@@ -49,13 +51,19 @@ const COMPONENT_GROUPS = {
 };
 
 export default function DrawingAnalyserPage() {
-  const { user, getAuthHeaders } = useAuth(); // ✅ Get user and auth headers
+  const { user, getAuthHeaders } = useAuth();
   const [uploading, setUploading] = useState(false);
   const [drawings, setDrawings] = useState<Drawing[]>([]);
   const [selectedDrawing, setSelectedDrawing] = useState<Drawing | null>(null);
   const [loading, setLoading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editedList, setEditedList] = useState<CuttingListItem[]>([]);
+  const [imageLoading, setImageLoading] = useState(false);
+  const [imageError, setImageError] = useState(false);
+  
+  // Bulk delete state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   useEffect(() => {
     fetchDrawings();
@@ -64,6 +72,7 @@ export default function DrawingAnalyserPage() {
   useEffect(() => {
     if (selectedDrawing) {
       setEditedList([...selectedDrawing.cutting_list]);
+      setImageError(false);
     }
   }, [selectedDrawing]);
 
@@ -100,7 +109,6 @@ export default function DrawingAnalyserPage() {
       formData.append('file', file);
       formData.append('project_name', file.name.replace(/\.[^/.]+$/, ''));
 
-      // ✅ Get auth headers from context
       const authHeaders = getAuthHeaders();
       
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
@@ -111,8 +119,7 @@ export default function DrawingAnalyserPage() {
       const response = await fetch(uploadUrl, {
         method: 'POST',
         headers: {
-          ...authHeaders, // ✅ Includes "Authorization: Bearer <token>"
-          // ❌ Don't set Content-Type - browser sets it for FormData
+          ...authHeaders,
         },
         body: formData,
       });
@@ -138,7 +145,8 @@ export default function DrawingAnalyserPage() {
         total_pieces: data.total_pieces || 0,
         total_area_m2: data.total_area_m2 || 0,
         confidence: data.confidence || 0,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        preview_url: `/api/drawing-analyser/${data.drawing_id}/preview`
       };
       
       const confidencePercent = Math.round((data.confidence || 0) * 100);
@@ -155,7 +163,7 @@ export default function DrawingAnalyserPage() {
     } finally {
       setUploading(false);
     }
-  }, [drawings, getAuthHeaders]); // ✅ Added getAuthHeaders dependency
+  }, [drawings, getAuthHeaders]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -187,6 +195,88 @@ export default function DrawingAnalyserPage() {
     }
   };
 
+  // Bulk delete functions
+  const toggleSelectAll = () => {
+    if (selectedIds.size === drawings.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(drawings.map(d => d.id)));
+    }
+  };
+
+  const toggleSelectDrawing = (drawingId: string) => {
+    const newSelected = new Set(selectedIds);
+    if (newSelected.has(drawingId)) {
+      newSelected.delete(drawingId);
+    } else {
+      newSelected.add(drawingId);
+    }
+    setSelectedIds(newSelected);
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) {
+      toast.error('No drawings selected');
+      return;
+    }
+
+    const count = selectedIds.size;
+    if (!confirm(`Are you sure you want to delete ${count} drawing${count > 1 ? 's' : ''}?`)) {
+      return;
+    }
+
+    setBulkDeleting(true);
+
+    try {
+      // Delete all selected drawings
+      const deletePromises = Array.from(selectedIds).map(id => 
+        api.delete(`/api/drawing-analyser/${id}`)
+      );
+
+      await Promise.all(deletePromises);
+
+      toast.success(`Successfully deleted ${count} drawing${count > 1 ? 's' : ''}`);
+      
+      // Remove deleted drawings from state
+      setDrawings(drawings.filter(d => !selectedIds.has(d.id)));
+      setSelectedIds(new Set());
+      
+      // Clear selected drawing if it was deleted
+      if (selectedDrawing && selectedIds.has(selectedDrawing.id)) {
+        setSelectedDrawing(null);
+      }
+    } catch (error) {
+      console.error('Bulk delete error:', error);
+      toast.error('Failed to delete some drawings');
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  const handleViewDrawing = async (drawing: Drawing) => {
+    setImageLoading(true);
+    
+    // Fetch full drawing details including cutting list if not already loaded
+    if (!drawing.cutting_list || drawing.cutting_list.length === 0) {
+      try {
+        const fullDrawing = await api.get(`/api/drawing-analyser/${drawing.id}`);
+        setSelectedDrawing({
+          ...drawing,
+          cutting_list: fullDrawing.cutting_list || [],
+          total_pieces: fullDrawing.total_pieces || 0,
+          total_area_m2: fullDrawing.total_area_m2 || 0
+        });
+      } catch (error) {
+        console.error('Error loading drawing details:', error);
+        setSelectedDrawing(drawing);
+      }
+    } else {
+      setSelectedDrawing(drawing);
+    }
+    
+    setImageLoading(false);
+  };
+
   const handleEdit = () => {
     setIsEditing(true);
     setEditedList([...selectedDrawing!.cutting_list]);
@@ -205,7 +295,6 @@ export default function DrawingAnalyserPage() {
     const totalArea = editedList.reduce((sum, item) => sum + item.area_m2, 0);
 
     try {
-      // ✅ Save to backend
       await api.put(`/api/drawing-analyser/${selectedDrawing.id}`, {
         cutting_list: editedList
       });
@@ -339,6 +428,11 @@ export default function DrawingAnalyserPage() {
 
   const displayList = isEditing ? editedList : (selectedDrawing?.cutting_list || []);
 
+  const getImageUrl = (drawing: Drawing) => {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+    return `${apiUrl}${drawing.preview_url || `/api/drawing-analyser/${drawing.id}/preview`}`;
+  };
+
   return (
     <div className="space-y-6 p-6">
       {/* Header */}
@@ -350,7 +444,6 @@ export default function DrawingAnalyserPage() {
           </p>
         </div>
         <div className="flex items-center gap-4">
-          {/* ✅ Show logged in user */}
           {user && (
             <div className="text-sm text-muted-foreground">
               <span className="font-medium">{user.first_name} {user.last_name}</span>
@@ -408,302 +501,394 @@ export default function DrawingAnalyserPage() {
 
       {/* Selected Drawing Details */}
       {selectedDrawing && (
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="flex items-center gap-2">
-                  {selectedDrawing.project_name}
-                  {getConfidenceBadge(selectedDrawing.confidence)}
-                </CardTitle>
-                <CardDescription>
-                  {selectedDrawing.original_filename} •{' '}
-                  <Badge variant="outline" className="ml-2">{selectedDrawing.ocr_method}</Badge>
-                </CardDescription>
-              </div>
-              <div className="flex gap-2">
-                {isEditing ? (
-                  <>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleCancelEdit}
-                    >
-                      <X className="mr-2 h-4 w-4" />
-                      Cancel
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={handleSaveEdit}
-                    >
-                      <Save className="mr-2 h-4 w-4" />
-                      Save Changes
-                    </Button>
-                  </>
-                ) : (
-                  <>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleEdit}
-                      disabled={selectedDrawing.cutting_list.length === 0}
-                    >
-                      <Edit2 className="mr-2 h-4 w-4" />
-                      Edit
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => exportToCsv(selectedDrawing)}
-                      disabled={selectedDrawing.cutting_list.length === 0}
-                    >
-                      <Download className="mr-2 h-4 w-4" />
-                      Export CSV
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleDelete(selectedDrawing.id)}
-                      className="text-red-600 hover:text-red-700"
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      Delete
-                    </Button>
-                  </>
-                )}
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            {/* Summary Stats */}
-            <div className="grid grid-cols-3 gap-4">
-              <Card>
-                <CardContent className="pt-6">
-                  <div className="text-2xl font-bold">
-                    {isEditing 
-                      ? editedList.reduce((sum, item) => sum + item.quantity, 0)
-                      : selectedDrawing.total_pieces
-                    }
-                  </div>
-                  <p className="text-xs text-muted-foreground">Total Pieces</p>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="pt-6">
-                  <div className="text-2xl font-bold">
-                    {isEditing
-                      ? editedList.reduce((sum, item) => sum + item.area_m2, 0).toFixed(2)
-                      : selectedDrawing.total_area_m2.toFixed(2)
-                    } m²
-                  </div>
-                  <p className="text-xs text-muted-foreground">Total Area</p>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="pt-6">
-                  <div className="text-2xl font-bold">
-                    {displayList.length}
-                  </div>
-                  <p className="text-xs text-muted-foreground">Component Types</p>
-                </CardContent>
-              </Card>
-            </div>
+        <>
+          {/* Back Button */}
+          <div>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setSelectedDrawing(null);
+                setIsEditing(false);
+              }}
+            >
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to All Drawings
+            </Button>
+          </div>
 
-            {/* No cutting list warning */}
-            {displayList.length === 0 && (
-              <div className="flex items-center gap-2 p-4 border border-yellow-200 bg-yellow-50 rounded-lg">
-                <AlertCircle className="h-5 w-5 text-yellow-600" />
-                <p className="text-sm text-yellow-800">
-                  No components were extracted from this drawing. The AI may need a clearer image or different drawing format.
-                </p>
-              </div>
-            )}
+          {/* Drawing Image Preview */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <ImageIcon className="h-5 w-5" />
+                Drawing Preview
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {imageLoading ? (
+                <div className="flex items-center justify-center p-12 bg-muted rounded-lg">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : imageError ? (
+                <div className="flex flex-col items-center justify-center p-12 bg-muted rounded-lg">
+                  <AlertCircle className="h-12 w-12 text-muted-foreground mb-4" />
+                  <p className="text-sm text-muted-foreground">
+                    Unable to load drawing preview
+                  </p>
+                </div>
+              ) : (
+                <div className="relative w-full bg-muted rounded-lg overflow-hidden">
+                  <img
+                    src={getImageUrl(selectedDrawing)}
+                    alt={selectedDrawing.project_name}
+                    className="w-full h-auto max-h-[600px] object-contain"
+                    onError={() => setImageError(true)}
+                  />
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
-            {/* Cutting List Table - Grouped by Component Type */}
-            {displayList.length > 0 && Object.entries(getGroupedItems(displayList)).map(([group, items]) => (
-              <div key={group} className="space-y-2">
-                <h3 className="text-lg font-semibold flex items-center gap-2">
-                  <Scissors className="h-5 w-5" />
-                  {group} ({items.length} {items.length === 1 ? 'item' : 'items'})
-                </h3>
-                <div className="border rounded-lg overflow-hidden">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Component</TableHead>
-                        <TableHead>Part Name</TableHead>
-                        <TableHead className="text-right">Unit Width</TableHead>
-                        <TableHead className="text-right">Width</TableHead>
-                        <TableHead className="text-right">Height</TableHead>
-                        <TableHead className="text-right">Depth</TableHead>
-                        <TableHead className="text-right">Qty</TableHead>
-                        <TableHead className="text-right">Thickness</TableHead>
-                        <TableHead>Edge Banding</TableHead>
-                        <TableHead className="text-right">Area (m²)</TableHead>
-                        {isEditing && <TableHead className="text-right">Actions</TableHead>}
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {items.map((item) => {
-                        const idx = item.originalIndex;
-                        return (
-                          <TableRow key={`${group}-${idx}`}>
-                            <TableCell>
-                              {isEditing ? (
-                                <Input
-                                  value={item.component_type}
-                                  onChange={(e) => updateItem(idx, 'component_type', e.target.value)}
-                                  className="w-24"
-                                />
-                              ) : (
-                                <Badge variant="secondary">{item.component_type}</Badge>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              {isEditing ? (
-                                <Input
-                                  value={item.part_name}
-                                  onChange={(e) => updateItem(idx, 'part_name', e.target.value)}
-                                  className="w-40"
-                                />
-                              ) : (
-                                <span className="font-medium">{item.part_name}</span>
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              {isEditing ? (
-                                <Input
-                                  type="number"
-                                  value={item.overall_unit_width || ''}
-                                  onChange={(e) => updateItem(idx, 'overall_unit_width', parseInt(e.target.value) || 0)}
-                                  className="w-20 text-right"
-                                />
-                              ) : (
-                                item.overall_unit_width || 'N/A'
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              {isEditing ? (
-                                <Input
-                                  type="number"
-                                  value={item.component_width || ''}
-                                  onChange={(e) => updateItem(idx, 'component_width', parseInt(e.target.value) || 0)}
-                                  className="w-20 text-right"
-                                />
-                              ) : (
-                                item.component_width || 'N/A'
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              {isEditing ? (
-                                <Input
-                                  type="number"
-                                  value={item.height || ''}
-                                  onChange={(e) => updateItem(idx, 'height', parseInt(e.target.value) || 0)}
-                                  className="w-20 text-right"
-                                />
-                              ) : (
-                                item.height || 'N/A'
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              {isEditing ? (
-                                <Input
-                                  type="number"
-                                  value={item.depth || ''}
-                                  onChange={(e) => updateItem(idx, 'depth', parseInt(e.target.value) || 0)}
-                                  className="w-20 text-right"
-                                />
-                              ) : (
-                                item.depth || 'N/A'
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              {isEditing ? (
-                                <Input
-                                  type="number"
-                                  value={item.quantity}
-                                  onChange={(e) => updateItem(idx, 'quantity', parseInt(e.target.value) || 1)}
-                                  className="w-16 text-right"
-                                  min="1"
-                                />
-                              ) : (
-                                item.quantity
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              {isEditing ? (
-                                <Input
-                                  type="number"
-                                  value={item.material_thickness}
-                                  onChange={(e) => updateItem(idx, 'material_thickness', parseInt(e.target.value) || 18)}
-                                  className="w-16 text-right"
-                                />
-                              ) : (
-                                item.material_thickness
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              {isEditing ? (
-                                <Input
-                                  value={item.edge_banding_notes || ''}
-                                  onChange={(e) => updateItem(idx, 'edge_banding_notes', e.target.value)}
-                                  className="w-32"
-                                  placeholder="None"
-                                />
-                              ) : (
-                                <span className="text-sm text-muted-foreground">
-                                  {item.edge_banding_notes || 'None'}
-                                </span>
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              {item.area_m2.toFixed(4)}
-                            </TableCell>
-                            {isEditing && (
-                              <TableCell className="text-right">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => deleteItem(idx)}
-                                  className="text-red-600 hover:text-red-700"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              </TableCell>
-                            )}
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
+          {/* Cutting List Details */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    {selectedDrawing.project_name}
+                    {getConfidenceBadge(selectedDrawing.confidence)}
+                  </CardTitle>
+                  <CardDescription>
+                    {selectedDrawing.original_filename} •{' '}
+                    <Badge variant="outline" className="ml-2">{selectedDrawing.ocr_method}</Badge>
+                  </CardDescription>
+                </div>
+                <div className="flex gap-2">
+                  {isEditing ? (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleCancelEdit}
+                      >
+                        <X className="mr-2 h-4 w-4" />
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={handleSaveEdit}
+                      >
+                        <Save className="mr-2 h-4 w-4" />
+                        Save Changes
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleEdit}
+                        disabled={selectedDrawing.cutting_list.length === 0}
+                      >
+                        <Edit2 className="mr-2 h-4 w-4" />
+                        Edit
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => exportToCsv(selectedDrawing)}
+                        disabled={selectedDrawing.cutting_list.length === 0}
+                      >
+                        <Download className="mr-2 h-4 w-4" />
+                        Export CSV
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleDelete(selectedDrawing.id)}
+                        className="text-red-600 hover:text-red-700"
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Delete
+                      </Button>
+                    </>
+                  )}
                 </div>
               </div>
-            ))}
-          </CardContent>
-        </Card>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* Summary Stats */}
+              <div className="grid grid-cols-3 gap-4">
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="text-2xl font-bold">
+                      {isEditing 
+                        ? editedList.reduce((sum, item) => sum + item.quantity, 0)
+                        : selectedDrawing.total_pieces
+                      }
+                    </div>
+                    <p className="text-xs text-muted-foreground">Total Pieces</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="text-2xl font-bold">
+                      {isEditing
+                        ? editedList.reduce((sum, item) => sum + item.area_m2, 0).toFixed(2)
+                        : selectedDrawing.total_area_m2.toFixed(2)
+                      } m²
+                    </div>
+                    <p className="text-xs text-muted-foreground">Total Area</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="text-2xl font-bold">
+                      {displayList.length}
+                    </div>
+                    <p className="text-xs text-muted-foreground">Component Types</p>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* No cutting list warning */}
+              {displayList.length === 0 && (
+                <div className="flex items-center gap-2 p-4 border border-yellow-200 bg-yellow-50 rounded-lg">
+                  <AlertCircle className="h-5 w-5 text-yellow-600" />
+                  <p className="text-sm text-yellow-800">
+                    No components were extracted from this drawing. The AI may need a clearer image or different drawing format.
+                  </p>
+                </div>
+              )}
+
+              {/* Cutting List Table - Grouped by Component Type */}
+              {displayList.length > 0 && Object.entries(getGroupedItems(displayList)).map(([group, items]) => (
+                <div key={group} className="space-y-2">
+                  <h3 className="text-lg font-semibold flex items-center gap-2">
+                    <Scissors className="h-5 w-5" />
+                    {group} ({items.length} {items.length === 1 ? 'item' : 'items'})
+                  </h3>
+                  <div className="border rounded-lg overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Component</TableHead>
+                          <TableHead>Part Name</TableHead>
+                          <TableHead className="text-right">Unit Width</TableHead>
+                          <TableHead className="text-right">Width</TableHead>
+                          <TableHead className="text-right">Height</TableHead>
+                          <TableHead className="text-right">Depth</TableHead>
+                          <TableHead className="text-right">Qty</TableHead>
+                          <TableHead className="text-right">Thickness</TableHead>
+                          <TableHead>Edge Banding</TableHead>
+                          <TableHead className="text-right">Area (m²)</TableHead>
+                          {isEditing && <TableHead className="text-right">Actions</TableHead>}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {items.map((item) => {
+                          const idx = item.originalIndex;
+                          return (
+                            <TableRow key={`${group}-${idx}`}>
+                              <TableCell>
+                                {isEditing ? (
+                                  <Input
+                                    value={item.component_type}
+                                    onChange={(e) => updateItem(idx, 'component_type', e.target.value)}
+                                    className="w-24"
+                                  />
+                                ) : (
+                                  <Badge variant="secondary">{item.component_type}</Badge>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {isEditing ? (
+                                  <Input
+                                    value={item.part_name}
+                                    onChange={(e) => updateItem(idx, 'part_name', e.target.value)}
+                                    className="w-40"
+                                  />
+                                ) : (
+                                  <span className="font-medium">{item.part_name}</span>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {isEditing ? (
+                                  <Input
+                                    type="number"
+                                    value={item.overall_unit_width || ''}
+                                    onChange={(e) => updateItem(idx, 'overall_unit_width', parseInt(e.target.value) || 0)}
+                                    className="w-20 text-right"
+                                  />
+                                ) : (
+                                  item.overall_unit_width || 'N/A'
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {isEditing ? (
+                                  <Input
+                                    type="number"
+                                    value={item.component_width || ''}
+                                    onChange={(e) => updateItem(idx, 'component_width', parseInt(e.target.value) || 0)}
+                                    className="w-20 text-right"
+                                  />
+                                ) : (
+                                  item.component_width || 'N/A'
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {isEditing ? (
+                                  <Input
+                                    type="number"
+                                    value={item.height || ''}
+                                    onChange={(e) => updateItem(idx, 'height', parseInt(e.target.value) || 0)}
+                                    className="w-20 text-right"
+                                  />
+                                ) : (
+                                  item.height || 'N/A'
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {isEditing ? (
+                                  <Input
+                                    type="number"
+                                    value={item.depth || ''}
+                                    onChange={(e) => updateItem(idx, 'depth', parseInt(e.target.value) || 0)}
+                                    className="w-20 text-right"
+                                  />
+                                ) : (
+                                  item.depth || 'N/A'
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {isEditing ? (
+                                  <Input
+                                    type="number"
+                                    value={item.quantity}
+                                    onChange={(e) => updateItem(idx, 'quantity', parseInt(e.target.value) || 1)}
+                                    className="w-16 text-right"
+                                    min="1"
+                                  />
+                                ) : (
+                                  item.quantity
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {isEditing ? (
+                                  <Input
+                                    type="number"
+                                    value={item.material_thickness}
+                                    onChange={(e) => updateItem(idx, 'material_thickness', parseInt(e.target.value) || 18)}
+                                    className="w-16 text-right"
+                                  />
+                                ) : (
+                                  item.material_thickness
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {isEditing ? (
+                                  <Input
+                                    value={item.edge_banding_notes || ''}
+                                    onChange={(e) => updateItem(idx, 'edge_banding_notes', e.target.value)}
+                                    className="w-32"
+                                    placeholder="None"
+                                  />
+                                ) : (
+                                  <span className="text-sm text-muted-foreground">
+                                    {item.edge_banding_notes || 'None'}
+                                  </span>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {item.area_m2.toFixed(4)}
+                              </TableCell>
+                              {isEditing && (
+                                <TableCell className="text-right">
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => deleteItem(idx)}
+                                    className="text-red-600 hover:text-red-700"
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </TableCell>
+                              )}
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </>
       )}
 
       {/* Recent Drawings List */}
       {drawings.length > 0 && !selectedDrawing && (
         <Card>
           <CardHeader>
-            <CardTitle>Recent Drawings</CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle>Recent Drawings ({drawings.length})</CardTitle>
+              {selectedIds.size > 0 && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleBulkDelete}
+                  disabled={bulkDeleting}
+                >
+                  {bulkDeleting ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="mr-2 h-4 w-4" />
+                  )}
+                  Delete Selected ({selectedIds.size})
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
+              {/* Select All Checkbox */}
+              {drawings.length > 0 && (
+                <div className="flex items-center gap-3 p-3 border-b">
+                  <Checkbox
+                    checked={selectedIds.size === drawings.length && drawings.length > 0}
+                    onCheckedChange={toggleSelectAll}
+                    id="select-all"
+                  />
+                  <label
+                    htmlFor="select-all"
+                    className="text-sm font-medium cursor-pointer"
+                  >
+                    Select All
+                  </label>
+                </div>
+              )}
+
+              {/* Drawing List */}
               {drawings.map((drawing) => (
                 <div
                   key={drawing.id}
-                  className="flex items-center justify-between p-4 border rounded-lg cursor-pointer transition-colors hover:bg-muted/50"
-                  onClick={() => setSelectedDrawing(drawing)}
+                  className="flex items-center gap-3 p-4 border rounded-lg transition-colors hover:bg-muted/50"
                 >
-                  <div className="flex items-center gap-4">
+                  <Checkbox
+                    checked={selectedIds.has(drawing.id)}
+                    onCheckedChange={() => toggleSelectDrawing(drawing.id)}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  <div 
+                    className="flex items-center gap-4 flex-1 cursor-pointer"
+                    onClick={() => handleViewDrawing(drawing)}
+                  >
                     <FileText className="h-8 w-8 text-muted-foreground" />
                     <div>
                       <p className="font-medium">{drawing.project_name}</p>
                       <p className="text-sm text-muted-foreground">
-                        {drawing.total_pieces} pieces • {drawing.total_area_m2.toFixed(2)} m²
+                        {drawing.total_pieces} pieces • {drawing.total_area_m2.toFixed(2)} m² • {new Date(drawing.created_at).toLocaleDateString()}
                       </p>
                     </div>
                   </div>
@@ -715,6 +900,17 @@ export default function DrawingAnalyserPage() {
                     >
                       {drawing.status}
                     </Badge>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(drawing.id);
+                      }}
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
                   </div>
                 </div>
               ))}
