@@ -8,9 +8,9 @@ export const useCurrentUser = () => {
   // Transform your auth user data to match the expected format
   return {
     id: user.id.toString(),
-    name: user.full_name,
-    username: user.email.split("@")[0], // Use email prefix as username
-    email: user.email,
+    name: user.full_name || user.name || "User",
+    username: user.username || user.email?.split("@")[0] || user.name?.toLowerCase().replace(/\s+/g, '.') || "user",
+    email: user.email || "no-email@example.com",
     avatar: `/avatars/default.png`, // You can add avatar field to your User model later
     role: user.role,
     department: user.department,

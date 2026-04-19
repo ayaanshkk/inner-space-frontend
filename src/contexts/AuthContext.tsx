@@ -8,6 +8,7 @@ interface User {
   name: any;
   id: number;
   email: string;
+  username?: string; // ✅ Added username field
   first_name: string;
   last_name: string;
   full_name: string;
@@ -34,12 +35,12 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  login: (username: string, password: string) => Promise<{ success: boolean; error?: string }>; // ✅ Changed from email to username
   logout: () => void;
   register: (userData: RegisterData) => Promise<{ success: boolean; error?: string }>;
   updateUser: (userData: Partial<User>) => void;
   checkAuth: () => Promise<boolean>;
-  getAuthHeaders: () => HeadersInit; // ✅ NEW: Helper to get auth headers
+  getAuthHeaders: () => HeadersInit;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -108,14 +109,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     initAuth();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ✅ LOGIN - Sets both localStorage AND cookie
-  const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
+  // ✅ LOGIN - Now accepts username instead of email
+  const login = async (username: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      console.log("🔄 Attempting login...");
+      console.log("🔄 Attempting login with username:", username);
 
       const response = await fetchPublic("/auth/login", {
         method: "POST",
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ username, password }), // ✅ Changed from email to username
       });
 
       let data;
@@ -154,7 +155,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // ✅ REGISTER - No redirects
+  // ✅ REGISTER - No changes needed
   const register = async (userData: RegisterData): Promise<{ success: boolean; error?: string }> => {
     try {
       console.log("🔄 Attempting registration...");
@@ -225,7 +226,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // ✅ NEW: Helper function to get auth headers for any request
+  // ✅ Helper function to get auth headers for any request
   const getAuthHeaders = useCallback((): HeadersInit => {
     const currentToken = token || localStorage.getItem("auth_token");
     
@@ -248,7 +249,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     register,
     updateUser,
     checkAuth,
-    getAuthHeaders, // ✅ Export the helper
+    getAuthHeaders,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

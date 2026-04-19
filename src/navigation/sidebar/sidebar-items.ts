@@ -24,6 +24,20 @@ import {
   type LucideIcon,
   Bot,
   Bell,
+  ClipboardList,
+  DollarSign,
+  ClipboardCheck,
+  History,
+  TrendingUp,
+  Phone,
+  BadgePoundSterling,
+  FolderOpen,
+  Trash2,
+  File,
+  UserPlus,
+  Archive,
+  UserCheck,
+  Sparkles,
 } from "lucide-react";
 
 export interface NavSubItem {
@@ -33,8 +47,8 @@ export interface NavSubItem {
   comingSoon?: boolean;
   newTab?: boolean;
   isNew?: boolean;
-  roles?: string[]; // Add roles field
-  badge?: number | string; // Add badge support for notification count
+  roles?: string[];
+  badge?: number | string;
 }
 
 export interface NavMainItem {
@@ -45,8 +59,8 @@ export interface NavMainItem {
   comingSoon?: boolean;
   newTab?: boolean;
   isNew?: boolean;
-  roles?: string[]; // Add roles field
-  badge?: number | string; // Add badge support for notification count
+  roles?: string[];
+  badge?: number | string;
 }
 
 export interface NavGroup {
@@ -55,73 +69,70 @@ export interface NavGroup {
   items: NavMainItem[];
 }
 
+// StreemLyne_MT Database Roles:
+// 1 = Platform Admin
+// 4 = Salesperson
+
 // Define all sidebar items with role permissions
 const allSidebarItems: NavGroup[] = [
   {
     id: 1,
-    label: "Dashboard",
     items: [
       {
         title: "Dashboard",
         url: "/dashboard/default",
         icon: Home,
-        roles: ["manager", "hr", "sales", "production"],
+        roles: ["platform admin", "salesperson"],
       },
       {
         title: "Drawing Analyzer",
-        url: "/dashboard/analyzer", // FIXED: Changed from /analyzer to /dashboard/analyzer
+        url: "/dashboard/analyzer",
         icon: FileText,
-        roles: ["manager", "hr", "sales", "production"],
+        roles: ["platform admin", "salesperson"],
         isNew: true,
       },
       {
         title: "Sales Pipeline",
         url: "/dashboard/sales_pipeline",
         icon: Briefcase,
-        roles: ["manager", "hr", "sales", "production"],
+        roles: ["platform admin", "salesperson"],
       },
       {
         title: "Customers",
         url: "/dashboard/customers",
         icon: Users,
-        roles: ["manager", "hr", "sales", "production"],
+        roles: ["platform admin", "salesperson"],
       },
-      // {
-      //   title: "Tasks",
-      //   url: "/dashboard/tasks",
-      //   icon: Briefcase,
-      //   roles: ["manager", "hr", "production"],
-      // },
       {
         title: "Materials",
         url: "/dashboard/materials",
         icon: Package,
-        roles: ["manager", "hr", "production"],
+        roles: ["platform admin"],
       },
       {
         title: "Schedule",
         url: "/dashboard/schedule",
         icon: Calendar,
-        roles: ["manager", "hr", "sales", "production"],
+        roles: ["platform admin", "salesperson"],
       },
       {
         title: "Chatbot",
         url: "/dashboard/chatbot",
         icon: Bot,
-        roles: ["manager", "hr", "sales", "production"],
+        roles: ["platform admin", "salesperson"],
       },
       {
         title: "Notifications",
         url: "/dashboard/notifications",
         icon: Bell,
-        roles: ["manager", "hr", "sales", "production"],
-        // Badge will be set dynamically - don't hardcode it here
+        roles: ["platform admin", "salesperson"],
+        isNew: true,
       },
       {
         title: "Settings",
         url: "/dashboard/settings",
         icon: Settings,
-        roles: ["manager", "hr", "sales", "production"],
+        roles: ["platform admin"],
       },
     ],
   },
@@ -129,30 +140,56 @@ const allSidebarItems: NavGroup[] = [
 
 // Filter sidebar items based on user role and optionally set notification badge
 export const getSidebarItems = (userRole: string, notificationCount?: number): NavGroup[] => {
-  const normalizedRole = userRole?.toLowerCase();
+  // Normalize role to lowercase for comparison
+  const normalizedRole = userRole?.toLowerCase().trim() || '';
+  
+  // Check if user has platform admin or salesperson role
+  // Handle both role_ids string (e.g., "1,4") and role names
+  const isPlatformAdmin = normalizedRole.includes('1') || normalizedRole.includes('platform') && normalizedRole.includes('admin');
+  const isSalesperson = normalizedRole.includes('4') || normalizedRole.includes('salesperson') || normalizedRole.includes('sales');
+
+  // Determine allowed roles
+  let allowedRoles: string[] = [];
+  if (isPlatformAdmin) {
+    // Platform Admin sees everything
+    allowedRoles = ['platform admin', 'salesperson'];
+  } else if (isSalesperson) {
+    // Salesperson only
+    allowedRoles = ['salesperson'];
+  }
+
   return allSidebarItems
     .map((group) => ({
       ...group,
       items: group.items
         .filter((item) => {
-          // If no roles defined, show to everyone
           if (!item.roles || item.roles.length === 0) return true;
-          // Check if user's role is in the allowed roles
-          return item.roles.includes(userRole);
+          return item.roles.some(role => allowedRoles.includes(role.toLowerCase()));
         })
         .map((item) => {
-          // Update notification badge count dynamically
+          // ✅ Apply notification badge to Notifications menu item
           if (item.title === "Notifications" && notificationCount !== undefined && notificationCount > 0) {
             return {
               ...item,
               badge: notificationCount > 9 ? '9+' : notificationCount,
             };
           }
+
+          if (item.subItems && item.subItems.length > 0) {
+            return {
+              ...item,
+              subItems: item.subItems.filter((subItem) => {
+                if (!subItem.roles || subItem.roles.length === 0) return true;
+                return subItem.roles.some(role => allowedRoles.includes(role.toLowerCase()));
+              }),
+            };
+          }
+
           return item;
         }),
     }))
-    .filter((group) => group.items.length > 0); // Remove empty groups
+    .filter((group) => group.items.length > 0);
 };
 
-// For backwards compatibility, export default items (manager view shows all)
-export const sidebarItems = getSidebarItems("manager");
+// For backwards compatibility, export default items (Platform Admin view shows all)
+export const sidebarItems = getSidebarItems("platform admin");

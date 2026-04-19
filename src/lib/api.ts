@@ -1,20 +1,25 @@
+// =====================================================
+// API Configuration for InnerSpace Interiors CRM
+// =====================================================
+
 // 1. CENTRALIZED BASE CONFIGURATION
 // BASE_PATH remains '', which correctly targets /api/ on the current frontend host (e.g., http://localhost:3000)
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || '';
 
-// FIXED: Converted the backend link to use localhost:5000 to match the Flask server
+// Backend URL - points to Flask backend (localhost:5000 or production URL)
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
 
-// Auth uses Next.js API routes (targets http://localhost:3000/api)
-const AUTH_API_ROOT = `${BASE_PATH}/api`;
+// Auth uses direct backend calls (no Next.js API routes needed)
+const AUTH_API_ROOT = BACKEND_URL;
 
-// Data uses external backend (targets http://localhost:5000)
+// Data uses external backend (same as auth)
 const DATA_API_ROOT = BACKEND_URL;
 
 // 🔍 DEBUG: Log the configuration BEFORE the window check
 console.log('🔍 Environment Check:', {
   'process.env.NEXT_PUBLIC_BACKEND_URL': process.env.NEXT_PUBLIC_BACKEND_URL,
   'BACKEND_URL': BACKEND_URL,
+  'AUTH_API_ROOT': AUTH_API_ROOT,
   'DATA_API_ROOT': DATA_API_ROOT,
 });
 
@@ -55,7 +60,7 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeout 
 
 /**
  * Helper function for PUBLIC API calls (no authentication required)
- * Used for login/register - calls Next.js API routes (localhost:3000/api)
+ * Used for login/register - calls Flask backend directly
  */
 export async function fetchPublic(path: string, options: RequestInit = {}) {
   const url = `${AUTH_API_ROOT}${path.startsWith("/") ? "" : "/"}${path}`;
@@ -67,7 +72,7 @@ export async function fetchPublic(path: string, options: RequestInit = {}) {
     ...options.headers,
   };
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     ...options,
     headers,
   });
@@ -76,8 +81,8 @@ export async function fetchPublic(path: string, options: RequestInit = {}) {
 }
 
 /**
- * Helper function to make authenticated API calls (or optional auth)
- * Used for data endpoints - calls external local backend (localhost:5000)
+ * Helper function to make authenticated API calls
+ * Used for all protected endpoints - calls Flask backend with JWT token
  */
 export async function fetchWithAuth(path: string, options: RequestInit = {}) {
   const token = localStorage.getItem("auth_token");
@@ -113,6 +118,8 @@ export async function fetchWithAuth(path: string, options: RequestInit = {}) {
     if (response.status === 401 && requiresAuth) {
       console.error("🔒 Unauthorized - token invalid or expired");
       localStorage.removeItem("auth_token");
+      localStorage.removeItem("auth_user");
+      localStorage.removeItem("user_role");
       redirectToLogin();
       throw new Error("Unauthorized - please log in again");
     }
@@ -150,15 +157,17 @@ async function handleApiResponse(response: Response) {
   }
 }
 
-// Example usage functions
+// =====================================================
+// API Helper Functions
+// =====================================================
+
 export const api = {
-  // AUTH ENDPOINTS (use fetchPublic - calls Next.js API routes on localhost:3000)
+  // ==================== AUTH ENDPOINTS ====================
+  // Uses direct backend calls to Flask /auth/* routes
+  
   async login(email: string, password: string) {
-    const response = await fetch(`${DATA_API_ROOT}/auth/login`, {
+    const response = await fetchPublic("/auth/login", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
       body: JSON.stringify({ email, password }),
     });
     return handleApiResponse(response);
@@ -170,6 +179,8 @@ export const api = {
     first_name: string;
     last_name: string;
     role?: string;
+    phone?: string;
+    department?: string;
   }) {
     const response = await fetchPublic("/auth/register", {
       method: "POST",
@@ -178,7 +189,13 @@ export const api = {
     return handleApiResponse(response);
   },
 
-  // GENERIC HTTP METHODS
+  async getCurrentUser() {
+    const response = await fetchWithAuth("/auth/me");
+    return handleApiResponse(response);
+  },
+
+  // ==================== GENERIC HTTP METHODS ====================
+  
   async get(path: string, options: RequestInit = {}) {
     try {
       const response = await fetchWithAuth(path, {
@@ -238,7 +255,8 @@ export const api = {
     return handleApiResponse(response);
   },
 
-  // DATA ENDPOINTS (use fetchWithAuth - calls Flask backend on localhost:5000)
+  // ==================== CUSTOMER ENDPOINTS ====================
+  
   async getCustomers() {
     try {
       const response = await fetchWithAuth("/customers"); 
@@ -249,6 +267,44 @@ export const api = {
     }
   },
 
+  async getCustomer(customerId: string) {
+    const response = await fetchWithAuth(`/customers/${customerId}`);
+    return handleApiResponse(response);
+  },
+
+  async createCustomer(customerData: any) {
+    const response = await fetchWithAuth("/customers", {
+      method: "POST",
+      body: JSON.stringify(customerData),
+    });
+    return handleApiResponse(response);
+  },
+
+  async updateCustomer(customerId: string, customerData: any) {
+    const response = await fetchWithAuth(`/customers/${customerId}`, {
+      method: "PUT",
+      body: JSON.stringify(customerData),
+    });
+    return handleApiResponse(response);
+  },
+
+  async deleteCustomer(customerId: string) {
+    const response = await fetchWithAuth(`/customers/${customerId}`, {
+      method: "DELETE",
+    });
+    return handleApiResponse(response);
+  },
+
+  async updateCustomerStage(customerId: string, stage: string, reason: string, updatedBy: string) {
+    const response = await fetchWithAuth(`/customers/${customerId}/stage`, {
+      method: "PATCH",
+      body: JSON.stringify({ stage, reason, updated_by: updatedBy }),
+    });
+    return handleApiResponse(response);
+  },
+
+  // ==================== JOB ENDPOINTS ====================
+  
   async getJobs() {
     try {
       const response = await fetchWithAuth("/jobs");
@@ -259,20 +315,30 @@ export const api = {
     }
   },
 
-  async getPipeline() {
-    try {
-      const response = await fetchWithAuth("/pipeline");
-      return await handleApiResponse(response);
-    } catch (error) {
-      console.warn("⚠️ getPipeline failed, returning empty data");
-      return { pipeline: [] };
-    }
+  async getJob(jobId: string) {
+    const response = await fetchWithAuth(`/jobs/${jobId}`);
+    return handleApiResponse(response);
   },
 
-  async updateCustomerStage(customerId: string, stage: string, reason: string, updatedBy: string) {
-    const response = await fetchWithAuth(`/customers/${customerId}/stage`, {
-      method: "PATCH",
-      body: JSON.stringify({ stage, reason, updated_by: updatedBy }),
+  async createJob(jobData: any) {
+    const response = await fetchWithAuth("/jobs", {
+      method: "POST",
+      body: JSON.stringify(jobData),
+    });
+    return handleApiResponse(response);
+  },
+
+  async updateJob(jobId: string, jobData: any) {
+    const response = await fetchWithAuth(`/jobs/${jobId}`, {
+      method: "PUT",
+      body: JSON.stringify(jobData),
+    });
+    return handleApiResponse(response);
+  },
+
+  async deleteJob(jobId: string) {
+    const response = await fetchWithAuth(`/jobs/${jobId}`, {
+      method: "DELETE",
     });
     return handleApiResponse(response);
   },
@@ -285,7 +351,20 @@ export const api = {
     return handleApiResponse(response);
   },
 
-  // ASSIGNMENT ENDPOINTS (for schedule)
+  // ==================== PIPELINE ENDPOINTS ====================
+  
+  async getPipeline() {
+    try {
+      const response = await fetchWithAuth("/pipeline");
+      return await handleApiResponse(response);
+    } catch (error) {
+      console.warn("⚠️ getPipeline failed, returning empty data");
+      return { pipeline: [] };
+    }
+  },
+
+  // ==================== ASSIGNMENT ENDPOINTS ====================
+  
   async getAssignments() {
     try {
       const response = await fetchWithAuth("/assignments");
@@ -294,6 +373,11 @@ export const api = {
       console.warn("⚠️ getAssignments failed, returning empty data");
       return [];
     }
+  },
+
+  async getAssignment(assignmentId: string) {
+    const response = await fetchWithAuth(`/assignments/${assignmentId}`);
+    return handleApiResponse(response);
   },
 
   async createAssignment(assignmentData: any) {
@@ -314,6 +398,106 @@ export const api = {
 
   async deleteAssignment(assignmentId: string) {
     const response = await fetchWithAuth(`/assignments/${assignmentId}`, {
+      method: "DELETE",
+    });
+    return handleApiResponse(response);
+  },
+
+  // ==================== NOTIFICATION ENDPOINTS ====================
+  
+  async getNotifications() {
+    try {
+      const response = await fetchWithAuth("/notifications/production");
+      return await handleApiResponse(response);
+    } catch (error) {
+      console.warn("⚠️ getNotifications failed, returning empty data");
+      return [];
+    }
+  },
+
+  async markNotificationAsRead(notificationId: number) {
+    const response = await fetchWithAuth(`/notifications/production/${notificationId}/read`, {
+      method: "PATCH",
+    });
+    return handleApiResponse(response);
+  },
+
+  async dismissNotification(notificationId: number) {
+    const response = await fetchWithAuth(`/notifications/production/${notificationId}/dismiss`, {
+      method: "POST",
+    });
+    return handleApiResponse(response);
+  },
+
+  async deleteNotification(notificationId: number) {
+    const response = await fetchWithAuth(`/notifications/production/${notificationId}`, {
+      method: "DELETE",
+    });
+    return handleApiResponse(response);
+  },
+
+  // ==================== DOCUMENT ENDPOINTS ====================
+  
+  async getDocuments() {
+    try {
+      const response = await fetchWithAuth("/files/documents");
+      return await handleApiResponse(response);
+    } catch (error) {
+      console.warn("⚠️ getDocuments failed, returning empty data");
+      return { documents: [] };
+    }
+  },
+
+  async uploadDocument(formData: FormData) {
+    const token = localStorage.getItem("auth_token");
+    const response = await fetch(`${DATA_API_ROOT}/files/documents`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+      },
+      body: formData, // Don't set Content-Type for FormData
+    });
+    return handleApiResponse(response);
+  },
+
+  async deleteDocument(documentId: string) {
+    const response = await fetchWithAuth(`/files/documents/${documentId}`, {
+      method: "DELETE",
+    });
+    return handleApiResponse(response);
+  },
+
+  // ==================== DRAWING ANALYSER ENDPOINTS ====================
+  
+  async getDrawings() {
+    try {
+      const response = await fetchWithAuth("/api/drawing-analyser");
+      return await handleApiResponse(response);
+    } catch (error) {
+      console.warn("⚠️ getDrawings failed, returning empty data");
+      return { drawings: [], total: 0, limit: 50, offset: 0 };
+    }
+  },
+
+  async uploadDrawing(formData: FormData) {
+    const token = localStorage.getItem("auth_token");
+    const response = await fetch(`${DATA_API_ROOT}/api/drawing-analyser/upload`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+      },
+      body: formData,
+    });
+    return handleApiResponse(response);
+  },
+
+  async getDrawing(drawingId: string) {
+    const response = await fetchWithAuth(`/api/drawing-analyser/${drawingId}`);
+    return handleApiResponse(response);
+  },
+
+  async deleteDrawing(drawingId: string) {
+    const response = await fetchWithAuth(`/api/drawing-analyser/${drawingId}`, {
       method: "DELETE",
     });
     return handleApiResponse(response);

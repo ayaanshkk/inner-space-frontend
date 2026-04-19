@@ -61,15 +61,20 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
   if (!currentUser) return null;
 
-  // ✅ Debug: Log the user role
-  console.log("Current user role:", currentUser.role);
-  console.log("Full user object:", currentUser);
+  // ✅ Get role from currentUser.role (which contains role_ids)
+  // Backend returns: { role: "1", role_ids: "1" } or { role: "4", role_ids: "4" }
+  const userRole = currentUser.role || "platform admin"; // Fallback to platform admin if no role
 
-  // ✅ Get filtered sidebar items - with fallback to show all if role doesn't match
-  const userRole = currentUser.role?.toLowerCase();
+  // ✅ Debug: Log the user role
+  console.log("🔍 Current user role:", userRole);
+  console.log("🔍 Full user object:", currentUser);
+
+  // ✅ Get filtered sidebar items
   const sidebarItems = getSidebarItems(userRole);
 
-  console.log("Filtered sidebar items:", sidebarItems);
+  console.log("📋 Filtered sidebar items:", sidebarItems);
+  console.log("📊 Number of groups:", sidebarItems.length);
+  console.log("📊 Total items:", sidebarItems.reduce((sum, group) => sum + group.items.length, 0));
 
   return (
     <Sidebar {...props}>
