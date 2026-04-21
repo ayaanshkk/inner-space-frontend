@@ -1,6 +1,3 @@
-// src/app/(main)/dashboard/manual-cabinet-entry/page.tsx
-// K Carc Style Manual Cabinet Entry
-
 'use client';
 
 import { useState } from 'react';
@@ -12,18 +9,48 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Calculator, Ruler, Save, Download, Trash2, FileText } from 'lucide-react';
+import { Calculator, Ruler, Save, Download, Trash2, FileText, Package } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface Component {
   name: string;
-  panel_l: number;  // Panel Length (mm)
-  panel_w: number;  // Panel Width (mm)
+  panel_l: number;
+  panel_w: number;
   thickness: number;
   quantity: number;
-  edging_length_m: number;  // Edging in meters
+  edging_length_m: number;
   material: string;
   notes: string;
+}
+
+interface CuttingListItem {
+  line_number: number;
+  dimension_display: string;
+  dimension_l: number;
+  dimension_w: number;
+  quantity: number;
+  material: string;
+  edging: string;
+  notes: string;
+  area_m2: number;
+}
+
+interface CuttingListSection {
+  category: string;
+  items: CuttingListItem[];
+}
+
+interface MaterialSummary {
+  sheets_18mm: Record<string, number>;
+  sheets_6mm: Record<string, number>;
+  total_edging_m: number;
+  material_breakdown: Array<{
+    material: string;
+    pieces: number;
+    area_m2: number;
+  }>;
+  estimated_sheets_18mm: number;
+  estimated_sheets_6mm: number;
 }
 
 interface CalculationResult {
@@ -40,6 +67,8 @@ interface CalculationResult {
     doors: Component[];
     hardware: any[];
   };
+  cutting_list_formatted: CuttingListSection[];
+  material_summary: MaterialSummary;
   summary: {
     total_panels: number;
     total_area_m2: number;
@@ -48,16 +77,17 @@ interface CalculationResult {
 }
 
 export default function ManualCabinetEntryPage() {
-  // Form inputs (matching K Carc: C3=Height, D3=Width, E3=Depth)
+  // Form inputs
   const [cabinetType, setCabinetType] = useState<'base' | 'wall'>('base');
-  const [height, setHeight] = useState<string>('400');  // C3 - K Carc example
-  const [width, setWidth] = useState<string>('1200');   // D3 - K Carc example
-  const [depth, setDepth] = useState<string>('500');    // E3 - K Carc example
+  const [height, setHeight] = useState<string>('720');
+  const [width, setWidth] = useState<string>('1200');
+  const [depth, setDepth] = useState<string>('500');
   const [projectName, setProjectName] = useState<string>('');
   
   // Calculation state
   const [calculating, setCalculating] = useState(false);
   const [result, setResult] = useState<CalculationResult | null>(null);
+  const [showDetailedList, setShowDetailedList] = useState(true);
 
   const handleCalculate = async () => {
     if (!height || !width) {
@@ -118,34 +148,41 @@ export default function ManualCabinetEntryPage() {
     const rows: string[][] = [
       [result.cabinet_type],
       [''],
-      ['Board', 'Height mm', 'Width mm', 'Depth'],
-      ['18mm MFC', height, width, depth],
-      [''],
-      ['Component', 'Panel L', 'Panel W', 'm²', 'Edging L (m)', 'Quantity', 'Material']
+      ['CUTTING LIST - DETAILED'],
+      ['']
     ];
 
-    // Add all components
-    const allComponents = [
-      ...result.components.carcass,
-      ...result.components.backs,
-      ...result.components.shelves,
-      ...result.components.doors
-    ];
-
-    allComponents.forEach((comp: Component) => {
-      const area_m2 = Math.ceil((comp.panel_l * comp.panel_w) / 1_000_000 * 100) / 100;
-      rows.push([
-        comp.name,
-        comp.panel_l.toString(),
-        comp.panel_w.toString(),
-        area_m2.toFixed(2),
-        comp.edging_length_m.toFixed(3),
-        comp.quantity.toString(),
-        comp.material
-      ]);
+    // Add each section
+    result.cutting_list_formatted.forEach(section => {
+      rows.push([section.category]);
+      rows.push(['#', 'Dimensions', 'Qty', 'Material', 'Edging', 'Notes', 'Area (m²)']);
+      
+      section.items.forEach(item => {
+        rows.push([
+          item.line_number.toString(),
+          item.dimension_display,
+          item.quantity.toString(),
+          item.material,
+          item.edging,
+          item.notes,
+          item.area_m2.toFixed(2)
+        ]);
+      });
+      
+      rows.push(['']);
     });
 
+    // Add material summary
+    rows.push(['MATERIAL SUMMARY']);
     rows.push(['']);
+    result.material_summary.material_breakdown.forEach(mat => {
+      rows.push([mat.material, `${mat.pieces} pieces`, `${mat.area_m2} m²`]);
+    });
+    rows.push(['']);
+    rows.push(['Estimated 18mm Sheets', result.material_summary.estimated_sheets_18mm.toString()]);
+    rows.push(['Estimated 6mm Sheets', result.material_summary.estimated_sheets_6mm.toString()]);
+    rows.push(['']);
+    rows.push(['TOTALS']);
     rows.push(['Total Panels', result.summary.total_panels.toString()]);
     rows.push(['Total Area (m²)', result.summary.total_area_m2.toFixed(2)]);
 
@@ -163,16 +200,10 @@ export default function ManualCabinetEntryPage() {
 
   const handleReset = () => {
     setResult(null);
-    setHeight('400');
+    setHeight('720');
     setWidth('1200');
     setDepth('500');
     setProjectName('');
-  };
-
-  // Calculate area for display (K Carc formula)
-  const getComponentArea = (component: Component) => {
-    const area = Math.ceil((component.panel_l * component.panel_w) / 1_000_000 * 100) / 100;
-    return area.toFixed(2);
   };
 
   return (
@@ -182,12 +213,12 @@ export default function ManualCabinetEntryPage() {
         <div>
           <h1 className="text-3xl font-bold">Manual Cabinet Entry</h1>
           <p className="text-muted-foreground">
-            K Carc Style - Enter dimensions, get instant cutting list
+            K Carc Style - Detailed Cutting List Generator
           </p>
         </div>
       </div>
 
-      {/* Input Form - K Carc Style */}
+      {/* Input Form */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -228,7 +259,7 @@ export default function ManualCabinetEntryPage() {
             </div>
           </div>
 
-          {/* Dimensions - K Carc Style Input */}
+          {/* Dimensions */}
           <div className="border rounded-lg p-4 bg-muted/30">
             <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
@@ -326,10 +357,10 @@ export default function ManualCabinetEntryPage() {
         </CardContent>
       </Card>
 
-      {/* Results - K Carc Style */}
+      {/* Results */}
       {result && (
         <>
-          {/* Summary */}
+          {/* Summary Cards */}
           <div className="grid grid-cols-4 gap-4">
             <Card>
               <CardContent className="pt-6">
@@ -359,106 +390,212 @@ export default function ManualCabinetEntryPage() {
             </Card>
           </div>
 
-          {/* Cutting List - K Carc Table Style */}
-          <Card>
-            <CardHeader>
-              <CardTitle>{result.cabinet_type}</CardTitle>
-              <CardDescription>
-                Cutting list with K Carc formula calculations
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-muted/50">
-                    <TableHead className="font-bold">Component</TableHead>
-                    <TableHead className="text-right font-bold">Panel L (mm)</TableHead>
-                    <TableHead className="text-right font-bold">Panel W (mm)</TableHead>
-                    <TableHead className="text-right font-bold">m²</TableHead>
-                    <TableHead className="text-right font-bold">Edging L (m)</TableHead>
-                    <TableHead className="text-center font-bold">Qty</TableHead>
-                    <TableHead className="font-bold">Material</TableHead>
-                    <TableHead className="font-bold">Notes</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {/* Carcass Components */}
-                  {result.components.carcass.map((comp, idx) => (
-                    <TableRow key={`carcass-${idx}`}>
-                      <TableCell className="font-medium">{comp.name}</TableCell>
-                      <TableCell className="text-right">{comp.panel_l}</TableCell>
-                      <TableCell className="text-right">{comp.panel_w}</TableCell>
-                      <TableCell className="text-right font-mono">{getComponentArea(comp)}</TableCell>
-                      <TableCell className="text-right font-mono">{comp.edging_length_m.toFixed(3)}</TableCell>
-                      <TableCell className="text-center">{comp.quantity}</TableCell>
-                      <TableCell><Badge variant="outline">{comp.material}</Badge></TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{comp.notes}</TableCell>
-                    </TableRow>
-                  ))}
+          {/* View Toggle */}
+          <div className="flex gap-2">
+            <Button 
+              variant={showDetailedList ? 'default' : 'outline'}
+              onClick={() => setShowDetailedList(true)}
+            >
+              <FileText className="mr-2 h-4 w-4" />
+              Detailed Cutting List
+            </Button>
+            <Button 
+              variant={!showDetailedList ? 'default' : 'outline'}
+              onClick={() => setShowDetailedList(false)}
+            >
+              <Package className="mr-2 h-4 w-4" />
+              Component View
+            </Button>
+          </div>
 
-                  {/* Back Panel */}
-                  {result.components.backs.map((comp, idx) => (
-                    <TableRow key={`back-${idx}`}>
-                      <TableCell className="font-medium">{comp.name}</TableCell>
-                      <TableCell className="text-right">{comp.panel_l}</TableCell>
-                      <TableCell className="text-right">{comp.panel_w}</TableCell>
-                      <TableCell className="text-right font-mono">{getComponentArea(comp)}</TableCell>
-                      <TableCell className="text-right font-mono">{comp.edging_length_m.toFixed(3)}</TableCell>
-                      <TableCell className="text-center">{comp.quantity}</TableCell>
-                      <TableCell><Badge variant="outline">{comp.material}</Badge></TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{comp.notes}</TableCell>
-                    </TableRow>
-                  ))}
+          {/* DETAILED CUTTING LIST - Like Paper Format */}
+          {showDetailedList && (
+            <Card>
+              <CardHeader>
+                <CardTitle>{result.cabinet_type} - Detailed Cutting List</CardTitle>
+                <CardDescription>
+                  Line-by-line breakdown matching paper format
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {result.cutting_list_formatted.map((section, sectionIdx) => (
+                  <div key={sectionIdx} className="mb-6">
+                    {/* Section Header */}
+                    <div className="bg-slate-800 text-white px-4 py-2 font-bold mb-2 rounded">
+                      {section.category}
+                    </div>
+                    
+                    {/* Section Items */}
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-muted/50">
+                          <TableHead className="w-12">#</TableHead>
+                          <TableHead>Dimensions</TableHead>
+                          <TableHead className="text-center">Qty</TableHead>
+                          <TableHead>Material</TableHead>
+                          <TableHead>Edging</TableHead>
+                          <TableHead>Notes</TableHead>
+                          <TableHead className="text-right">Area (m²)</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {section.items.map((item, itemIdx) => (
+                          <TableRow key={itemIdx}>
+                            <TableCell className="font-mono text-sm">{item.line_number}</TableCell>
+                            <TableCell className="font-mono font-bold">
+                              {item.dimension_display}
+                            </TableCell>
+                            <TableCell className="text-center font-bold">{item.quantity}</TableCell>
+                            <TableCell>
+                              {item.material && <Badge variant="outline">{item.material}</Badge>}
+                            </TableCell>
+                            <TableCell>
+                              {item.edging && <Badge variant="secondary">{item.edging}</Badge>}
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {item.notes}
+                            </TableCell>
+                            <TableCell className="text-right font-mono">
+                              {item.area_m2.toFixed(2)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ))}
 
-                  {/* Shelves */}
-                  {result.components.shelves.map((comp, idx) => (
-                    <TableRow key={`shelf-${idx}`}>
-                      <TableCell className="font-medium">{comp.name}</TableCell>
-                      <TableCell className="text-right">{comp.panel_l}</TableCell>
-                      <TableCell className="text-right">{comp.panel_w}</TableCell>
-                      <TableCell className="text-right font-mono">{getComponentArea(comp)}</TableCell>
-                      <TableCell className="text-right font-mono">{comp.edging_length_m.toFixed(3)}</TableCell>
-                      <TableCell className="text-center">{comp.quantity}</TableCell>
-                      <TableCell><Badge variant="outline">{comp.material}</Badge></TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{comp.notes}</TableCell>
-                    </TableRow>
-                  ))}
+                {/* Material Summary - Like "4 Sheets" at bottom */}
+                <div className="mt-8 border-t pt-4">
+                  <h3 className="font-bold text-lg mb-4">Material Summary</h3>
+                  <div className="grid grid-cols-3 gap-4">
+                    {result.material_summary.material_breakdown.map((mat, idx) => (
+                      <Card key={idx}>
+                        <CardContent className="pt-6">
+                          <div className="text-2xl font-bold">{mat.pieces}</div>
+                          <p className="text-sm text-muted-foreground">{mat.material} pieces</p>
+                          <p className="text-xs text-muted-foreground">{mat.area_m2} m²</p>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                  
+                  <div className="mt-4 p-4 bg-blue-50 rounded-lg">
+                    <p className="font-bold">Estimated Sheets Required:</p>
+                    <p>18mm Sheets: <span className="font-bold">{result.material_summary.estimated_sheets_18mm}</span></p>
+                    <p>6mm Sheets: <span className="font-bold">{result.material_summary.estimated_sheets_6mm}</span></p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
-                  {/* Total Panel Cost Row */}
-                  <TableRow className="bg-muted/30 font-bold">
-                    <TableCell>Total Panel Cost</TableCell>
-                    <TableCell colSpan={7} className="text-right">
-                      {result.summary.total_area_m2.toFixed(2)} m²
-                    </TableCell>
-                  </TableRow>
-
-                  {/* Doors */}
-                  {result.components.doors.map((comp, idx) => (
-                    <TableRow key={`door-${idx}`}>
-                      <TableCell className="font-medium">{comp.name}</TableCell>
-                      <TableCell className="text-right">{comp.panel_l}</TableCell>
-                      <TableCell className="text-right">{comp.panel_w}</TableCell>
-                      <TableCell className="text-right font-mono">{getComponentArea(comp)}</TableCell>
-                      <TableCell className="text-right font-mono">{comp.edging_length_m.toFixed(3)}</TableCell>
-                      <TableCell className="text-center">{comp.quantity}</TableCell>
-                      <TableCell><Badge variant="outline">{comp.material}</Badge></TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{comp.notes}</TableCell>
+          {/* COMPONENT VIEW - Original Table */}
+          {!showDetailedList && (
+            <Card>
+              <CardHeader>
+                <CardTitle>{result.cabinet_type} - Component View</CardTitle>
+                <CardDescription>
+                  All components with K Carc formula calculations
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/50">
+                      <TableHead className="font-bold">Component</TableHead>
+                      <TableHead className="text-right font-bold">Panel L (mm)</TableHead>
+                      <TableHead className="text-right font-bold">Panel W (mm)</TableHead>
+                      <TableHead className="text-right font-bold">m²</TableHead>
+                      <TableHead className="text-right font-bold">Edging L (m)</TableHead>
+                      <TableHead className="text-center font-bold">Qty</TableHead>
+                      <TableHead className="font-bold">Material</TableHead>
+                      <TableHead className="font-bold">Notes</TableHead>
                     </TableRow>
-                  ))}
+                  </TableHeader>
+                  <TableBody>
+                    {/* Carcass Components */}
+                    {result.components.carcass.map((comp, idx) => (
+                      <TableRow key={`carcass-${idx}`}>
+                        <TableCell className="font-medium">{comp.name}</TableCell>
+                        <TableCell className="text-right">{comp.panel_l}</TableCell>
+                        <TableCell className="text-right">{comp.panel_w}</TableCell>
+                        <TableCell className="text-right font-mono">
+                          {(Math.ceil((comp.panel_l * comp.panel_w) / 1_000_000 * 100) / 100).toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">{comp.edging_length_m.toFixed(3)}</TableCell>
+                        <TableCell className="text-center">{comp.quantity}</TableCell>
+                        <TableCell><Badge variant="outline">{comp.material}</Badge></TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{comp.notes}</TableCell>
+                      </TableRow>
+                    ))}
 
-                  {/* Hardware */}
-                  {result.components.hardware.map((comp, idx) => (
-                    <TableRow key={`hardware-${idx}`} className="bg-blue-50/50">
-                      <TableCell className="font-medium">{comp.name}</TableCell>
-                      <TableCell colSpan={4} className="text-sm text-muted-foreground">{comp.notes}</TableCell>
-                      <TableCell className="text-center font-bold">{comp.quantity}</TableCell>
-                      <TableCell colSpan={2}></TableCell>
+                    {/* Other components... */}
+                    {result.components.backs.map((comp, idx) => (
+                      <TableRow key={`back-${idx}`}>
+                        <TableCell className="font-medium">{comp.name}</TableCell>
+                        <TableCell className="text-right">{comp.panel_l}</TableCell>
+                        <TableCell className="text-right">{comp.panel_w}</TableCell>
+                        <TableCell className="text-right font-mono">
+                          {(Math.ceil((comp.panel_l * comp.panel_w) / 1_000_000 * 100) / 100).toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">{comp.edging_length_m.toFixed(3)}</TableCell>
+                        <TableCell className="text-center">{comp.quantity}</TableCell>
+                        <TableCell><Badge variant="outline">{comp.material}</Badge></TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{comp.notes}</TableCell>
+                      </TableRow>
+                    ))}
+
+                    {result.components.shelves.map((comp, idx) => (
+                      <TableRow key={`shelf-${idx}`}>
+                        <TableCell className="font-medium">{comp.name}</TableCell>
+                        <TableCell className="text-right">{comp.panel_l}</TableCell>
+                        <TableCell className="text-right">{comp.panel_w}</TableCell>
+                        <TableCell className="text-right font-mono">
+                          {(Math.ceil((comp.panel_l * comp.panel_w) / 1_000_000 * 100) / 100).toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">{comp.edging_length_m.toFixed(3)}</TableCell>
+                        <TableCell className="text-center">{comp.quantity}</TableCell>
+                        <TableCell><Badge variant="outline">{comp.material}</Badge></TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{comp.notes}</TableCell>
+                      </TableRow>
+                    ))}
+
+                    <TableRow className="bg-muted/30 font-bold">
+                      <TableCell>Total Panel Cost</TableCell>
+                      <TableCell colSpan={7} className="text-right">
+                        {result.summary.total_area_m2.toFixed(2)} m²
+                      </TableCell>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+
+                    {result.components.doors.map((comp, idx) => (
+                      <TableRow key={`door-${idx}`}>
+                        <TableCell className="font-medium">{comp.name}</TableCell>
+                        <TableCell className="text-right">{comp.panel_l}</TableCell>
+                        <TableCell className="text-right">{comp.panel_w}</TableCell>
+                        <TableCell className="text-right font-mono">
+                          {(Math.ceil((comp.panel_l * comp.panel_w) / 1_000_000 * 100) / 100).toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">{comp.edging_length_m.toFixed(3)}</TableCell>
+                        <TableCell className="text-center">{comp.quantity}</TableCell>
+                        <TableCell><Badge variant="outline">{comp.material}</Badge></TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{comp.notes}</TableCell>
+                      </TableRow>
+                    ))}
+
+                    {result.components.hardware.map((comp, idx) => (
+                      <TableRow key={`hardware-${idx}`} className="bg-blue-50/50">
+                        <TableCell className="font-medium">{comp.name}</TableCell>
+                        <TableCell colSpan={4} className="text-sm text-muted-foreground">{comp.notes}</TableCell>
+                        <TableCell className="text-center font-bold">{comp.quantity}</TableCell>
+                        <TableCell colSpan={2}></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
 
