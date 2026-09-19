@@ -8,7 +8,7 @@ interface User {
   name: any;
   id: number;
   email: string;
-  username?: string; // ✅ Added username field
+  username?: string;
   first_name: string;
   last_name: string;
   full_name: string;
@@ -35,7 +35,7 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   loading: boolean;
-  login: (username: string, password: string) => Promise<{ success: boolean; error?: string }>; // ✅ Changed from email to username
+  login: (username: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   register: (userData: RegisterData) => Promise<{ success: boolean; error?: string }>;
   updateUser: (userData: Partial<User>) => void;
@@ -53,14 +53,12 @@ export const useAuth = () => {
   return context;
 };
 
-// ✅ Helper function to set cookie
 function setCookie(name: string, value: string, days: number = 7) {
   const expires = new Date();
   expires.setTime(expires.getTime() + days * 24 * 60 * 60 * 1000);
   document.cookie = `${name}=${value};expires=${expires.toUTCString()};path=/;SameSite=Lax`;
 }
 
-// ✅ Helper function to delete cookie
 function deleteCookie(name: string) {
   document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;`;
 }
@@ -80,7 +78,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     deleteCookie("auth-token");
   }, []);
 
-  // ✅ Initialize auth state from localStorage - ONLY RUN ONCE
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -109,14 +106,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     initAuth();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ✅ LOGIN - Now accepts username instead of email
   const login = async (username: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
       console.log("🔄 Attempting login with username:", username);
 
       const response = await fetchPublic("/auth/login", {
         method: "POST",
-        body: JSON.stringify({ username, password }), // ✅ Changed from email to username
+        body: JSON.stringify({ username, password }),
       });
 
       let data;
@@ -134,12 +130,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setToken(data.token);
         setUser(data.user);
 
-        // ✅ Save to localStorage
         localStorage.setItem("auth_token", data.token);
         localStorage.setItem("auth_user", JSON.stringify(data.user));
         localStorage.setItem("user_role", data.user.role);
 
-        // ✅ Save to cookie (for middleware)
         setCookie("auth-token", data.token, 7);
 
         console.log("💾 Auth state saved to localStorage AND cookie");
@@ -155,7 +149,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // ✅ REGISTER - No changes needed
   const register = async (userData: RegisterData): Promise<{ success: boolean; error?: string }> => {
     try {
       console.log("🔄 Attempting registration...");
@@ -188,14 +181,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // ✅ LOGOUT - Clear cookie too
   const logout = async () => {
     console.log("Logging out...");
     clearAuth();
     router.replace("/login");
   };
 
-  // ✅ AUTH CHECK - No redirects on failure
   const checkAuth = async (): Promise<boolean> => {
     if (!token) return false;
 
@@ -226,10 +217,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // ✅ Helper function to get auth headers for any request
   const getAuthHeaders = useCallback((): HeadersInit => {
     const currentToken = token || localStorage.getItem("auth_token");
-    
+
     if (!currentToken) {
       console.warn("⚠️ No token available for authentication");
       return {};

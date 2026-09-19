@@ -103,24 +103,24 @@ const allSidebarItems: NavGroup[] = [
         icon: Users,
         roles: ["platform admin", "salesperson"],
       },
-      {
-        title: "Materials",
-        url: "/dashboard/materials",
-        icon: Package,
-        roles: ["platform admin"],
-      },
+      // {
+      //   title: "Materials",
+      //   url: "/dashboard/materials",
+      //   icon: Package,
+      //   roles: ["platform admin"],
+      // },
       {
         title: "Schedule",
         url: "/dashboard/schedule",
         icon: Calendar,
         roles: ["platform admin", "salesperson"],
       },
-      {
-        title: "Chatbot",
-        url: "/dashboard/chatbot",
-        icon: Bot,
-        roles: ["platform admin", "salesperson"],
-      },
+      // {
+      //   title: "Chatbot",
+      //   url: "/dashboard/chatbot",
+      //   icon: Bot,
+      //   roles: ["platform admin", "salesperson"],
+      // },
       {
         title: "Notifications",
         url: "/dashboard/notifications",

@@ -2,20 +2,11 @@
 // API Configuration for InnerSpace Interiors CRM
 // =====================================================
 
-// 1. CENTRALIZED BASE CONFIGURATION
-// BASE_PATH remains '', which correctly targets /api/ on the current frontend host (e.g., http://localhost:3000)
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || '';
-
-// Backend URL - points to Flask backend (localhost:5000 or production URL)
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
-
-// Auth uses direct backend calls (no Next.js API routes needed)
 const AUTH_API_ROOT = BACKEND_URL;
-
-// Data uses external backend (same as auth)
 const DATA_API_ROOT = BACKEND_URL;
 
-// 🔍 DEBUG: Log the configuration BEFORE the window check
 console.log('🔍 Environment Check:', {
   'process.env.NEXT_PUBLIC_BACKEND_URL': process.env.NEXT_PUBLIC_BACKEND_URL,
   'BACKEND_URL': BACKEND_URL,
@@ -23,7 +14,6 @@ console.log('🔍 Environment Check:', {
   'DATA_API_ROOT': DATA_API_ROOT,
 });
 
-// 🔍 DEBUG: Log the configuration
 if (typeof window !== 'undefined') {
   console.log('🌐 API Configuration:', {
     BASE_PATH,
@@ -32,7 +22,6 @@ if (typeof window !== 'undefined') {
   });
 }
 
-// ✅ Helper function to redirect to login with basePath support
 function redirectToLogin() {
   if (typeof window !== 'undefined') {
     const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
@@ -40,7 +29,6 @@ function redirectToLogin() {
   }
 }
 
-// ✅ Helper to add timeout to fetch calls
 async function fetchWithTimeout(url: string, options: RequestInit = {}, timeout = 60000) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
@@ -58,13 +46,8 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeout 
   }
 }
 
-/**
- * Helper function for PUBLIC API calls (no authentication required)
- * Used for login/register - calls Flask backend directly
- */
 export async function fetchPublic(path: string, options: RequestInit = {}) {
   const url = `${AUTH_API_ROOT}${path.startsWith("/") ? "" : "/"}${path}`;
-
   console.log('📡 fetchPublic calling:', url);
 
   const headers = {
@@ -80,18 +63,11 @@ export async function fetchPublic(path: string, options: RequestInit = {}) {
   return response;
 }
 
-/**
- * Helper function to make authenticated API calls
- * Used for all protected endpoints - calls Flask backend with JWT token
- */
 export async function fetchWithAuth(path: string, options: RequestInit = {}) {
   const token = localStorage.getItem("auth_token");
-
   const url = `${DATA_API_ROOT}${path.startsWith("/") ? "" : "/"}${path}`;
-
   console.log('📡 fetchWithAuth calling:', url);
 
-  // ✅ For drawing-analyser, make auth optional (since mock user is set in backend)
   const requiresAuth = !path.includes('/api/drawing-analyser');
 
   if (!token && requiresAuth) {
@@ -104,7 +80,6 @@ export async function fetchWithAuth(path: string, options: RequestInit = {}) {
     ...(options.headers as Record<string, string> || {}),
   };
 
-  // Add auth header if token exists
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
@@ -134,7 +109,6 @@ export async function fetchWithAuth(path: string, options: RequestInit = {}) {
   }
 }
 
-// ✅ Helper to handle API responses gracefully
 async function handleApiResponse(response: Response) {
   if (response.ok) {
     const contentType = response.headers.get("content-type");
@@ -145,7 +119,6 @@ async function handleApiResponse(response: Response) {
     }
   }
 
-  // Handle errors
   const contentType = response.headers.get("content-type");
   if (contentType && contentType.includes("application/json")) {
     const errorData = await response.json();
@@ -163,8 +136,7 @@ async function handleApiResponse(response: Response) {
 
 export const api = {
   // ==================== AUTH ENDPOINTS ====================
-  // Uses direct backend calls to Flask /auth/* routes
-  
+
   async login(email: string, password: string) {
     const response = await fetchPublic("/auth/login", {
       method: "POST",
@@ -195,7 +167,7 @@ export const api = {
   },
 
   // ==================== GENERIC HTTP METHODS ====================
-  
+
   async get(path: string, options: RequestInit = {}) {
     try {
       const response = await fetchWithAuth(path, {
@@ -210,7 +182,6 @@ export const api = {
         name: error.name
       });
       
-      // ✅ Return empty data for drawing list endpoint to prevent crash
       if (path.includes('/api/drawing-analyser') && !path.includes('/upload')) {
         console.warn('⚠️ Drawing analyser GET failed, returning empty data');
         return { drawings: [], total: 0, limit: 50, offset: 0 };
@@ -256,10 +227,10 @@ export const api = {
   },
 
   // ==================== CUSTOMER ENDPOINTS ====================
-  
+
   async getCustomers() {
     try {
-      const response = await fetchWithAuth("/customers"); 
+      const response = await fetchWithAuth("/customers");
       return await handleApiResponse(response);
     } catch (error) {
       console.warn("⚠️ getCustomers failed, returning empty data");
@@ -304,7 +275,7 @@ export const api = {
   },
 
   // ==================== JOB ENDPOINTS ====================
-  
+
   async getJobs() {
     try {
       const response = await fetchWithAuth("/jobs");
@@ -352,7 +323,7 @@ export const api = {
   },
 
   // ==================== PIPELINE ENDPOINTS ====================
-  
+
   async getPipeline() {
     try {
       const response = await fetchWithAuth("/pipeline");
@@ -364,7 +335,7 @@ export const api = {
   },
 
   // ==================== ASSIGNMENT ENDPOINTS ====================
-  
+
   async getAssignments() {
     try {
       const response = await fetchWithAuth("/assignments");
@@ -404,7 +375,7 @@ export const api = {
   },
 
   // ==================== NOTIFICATION ENDPOINTS ====================
-  
+
   async getNotifications() {
     try {
       const response = await fetchWithAuth("/notifications/production");
@@ -437,7 +408,7 @@ export const api = {
   },
 
   // ==================== DOCUMENT ENDPOINTS ====================
-  
+
   async getDocuments() {
     try {
       const response = await fetchWithAuth("/files/documents");
@@ -455,7 +426,7 @@ export const api = {
       headers: {
         "Authorization": `Bearer ${token}`,
       },
-      body: formData, // Don't set Content-Type for FormData
+      body: formData,
     });
     return handleApiResponse(response);
   },
@@ -468,7 +439,7 @@ export const api = {
   },
 
   // ==================== DRAWING ANALYSER ENDPOINTS ====================
-  
+
   async getDrawings() {
     try {
       const response = await fetchWithAuth("/api/drawing-analyser");
@@ -501,5 +472,32 @@ export const api = {
       method: "DELETE",
     });
     return handleApiResponse(response);
+  },
+
+  // ==================== MANUAL CABINET ENDPOINTS ====================
+
+  async calculateCabinet(data: {
+    cabinet_type: 'base' | 'wall';
+    height: number;
+    width: number;
+    depth?: number;
+    project_name?: string;
+    save?: boolean;
+  }) {
+    const response = await fetchWithAuth('/api/manual-cabinet/calculate', { 
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return handleApiResponse(response);
+  },
+
+  async getSavedCabinets() {
+    try {
+      const response = await fetchWithAuth('/manual-cabinet/saved');
+      return await handleApiResponse(response);
+    } catch (error) {
+      console.warn('⚠️ getSavedCabinets failed, returning empty data');
+      return { cabinets: [] };
+    }
   },
 };
