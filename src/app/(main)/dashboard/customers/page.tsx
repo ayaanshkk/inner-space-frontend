@@ -332,8 +332,9 @@ export default function CustomersPage() {
                       <td className="px-4 py-3 font-medium text-gray-900">
                         <div className="flex items-center gap-2">
                           {!customer.has_documents && (
-                            <AlertCircle className="h-4 w-4 flex-shrink-0 text-red-500"
-                              title={`No documents. Drawings: ${customer.drawing_count}, Forms: ${customer.form_count}`} />
+                            <span title={`No documents. Drawings: ${customer.drawing_count}, Forms: ${customer.form_count}`}>
+                              <AlertCircle className="h-4 w-4 flex-shrink-0 text-red-500" />
+                            </span>
                           )}
                           {customer.name}
                         </div>
