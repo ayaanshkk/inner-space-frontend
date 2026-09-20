@@ -51,7 +51,7 @@ interface AccFields {
 const SECTIONS_LEFT  = ['GABLE', 'S/H', 'BACKS', 'END PANELS & INFILLS'];
 const SECTIONS_RIGHT = ['T/B & FIX SHELVES', 'DRAWS', 'BRACES', 'DOORS & DRAW FACES'];
 const ALL_SECTIONS   = [...SECTIONS_LEFT, ...SECTIONS_RIGHT];
-export const STORAGE_KEY = 'cutting_list_preview_data';
+const STORAGE_KEY = "cutting_list_data";
 const MIN_ROWS = 3;
 
 let _id = 0;
