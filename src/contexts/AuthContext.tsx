@@ -19,6 +19,11 @@ interface User {
   is_verified: boolean;
   created_at: string;
   last_login?: string;
+  // ── StreemLyne fields ──
+  employee_id?: number;
+  employee_name?: string;
+  tenant_id?: number | string;
+  role_ids?: string;
 }
 
 interface RegisterData {
@@ -75,6 +80,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.removeItem("auth_token");
     localStorage.removeItem("auth_user");
     localStorage.removeItem("user_role");
+    localStorage.removeItem("tenant_id");
     deleteCookie("auth-token");
   }, []);
 
@@ -91,6 +97,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setToken(storedToken);
           setUser(parsedUser);
           localStorage.setItem("user_role", parsedUser.role);
+
+          // Restore tenant_id in case it was cleared
+          if (parsedUser.tenant_id) {
+            localStorage.setItem("tenant_id", String(parsedUser.tenant_id));
+          }
+
           setCookie("auth-token", storedToken, 7);
           console.log("Auth state restored from localStorage");
         }
@@ -133,6 +145,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         localStorage.setItem("auth_token", data.token);
         localStorage.setItem("auth_user", JSON.stringify(data.user));
         localStorage.setItem("user_role", data.user.role);
+
+        // Store tenant_id separately for X-Tenant-ID header across all requests
+        if (data.user.tenant_id) {
+          localStorage.setItem("tenant_id", String(data.user.tenant_id));
+        }
 
         setCookie("auth-token", data.token, 7);
 
@@ -197,6 +214,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const data = await response.json();
         setUser(data.user);
         localStorage.setItem("auth_user", JSON.stringify(data.user));
+
+        // Keep tenant_id in sync
+        if (data.user?.tenant_id) {
+          localStorage.setItem("tenant_id", String(data.user.tenant_id));
+        }
+
         return true;
       } else {
         clearAuth();
@@ -214,6 +237,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const updatedUser = { ...user, ...userData };
       setUser(updatedUser);
       localStorage.setItem("auth_user", JSON.stringify(updatedUser));
+
+      // Keep tenant_id in sync if it changed
+      if (updatedUser.tenant_id) {
+        localStorage.setItem("tenant_id", String(updatedUser.tenant_id));
+      }
     }
   };
 
@@ -226,7 +254,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     return {
-      "Authorization": `Bearer ${currentToken}`,
+      Authorization: `Bearer ${currentToken}`,
     };
   }, [token]);
 
