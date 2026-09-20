@@ -121,12 +121,12 @@ function headerFromData(data: CLData): HeaderFields {
 
 function HField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
-    <div className="grid grid-cols-[130px_1fr] border-b border-gray-100 last:border-0">
-      <div className="bg-gray-50 font-semibold text-[9px] uppercase tracking-wide text-gray-500 px-3 py-2.5 border-r border-gray-100 flex items-center">
+    <div className="grid grid-cols-[110px_1fr] border-b border-gray-100 last:border-0">
+      <div className="bg-gray-50 font-semibold text-[9px] uppercase tracking-wide text-gray-500 px-2 py-2 border-r border-gray-100 flex items-center">
         {label}
       </div>
       <input
-        className="px-2 py-2.5 text-sm bg-transparent focus:outline-none focus:bg-yellow-50 focus:ring-1 focus:ring-inset focus:ring-blue-400"
+        className="px-2 py-2 text-xs bg-transparent focus:outline-none focus:bg-yellow-50 focus:ring-1 focus:ring-inset focus:ring-blue-400"
         value={value}
         onChange={e => onChange(e.target.value)}
         placeholder="—"
@@ -143,24 +143,30 @@ function CLRow({ item, lineNum, onChange, onDelete }: {
   const n = (v: any) => (v === 0 ? '' : String(v));
   const inp = 'bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-blue-400 focus:bg-yellow-50 rounded text-[13px] font-mono text-center';
   return (
-    <div className="group flex items-stretch border-b border-gray-100 last:border-0 hover:bg-gray-50/40 min-h-[36px]">
-      <div className="w-8 shrink-0 text-[10px] text-gray-400 font-bold border-r border-gray-100 flex items-center justify-center bg-gray-50/60">{lineNum}</div>
-      <div className="w-[200px] shrink-0 border-r border-gray-100 flex items-center gap-1 px-1">
+    <div className="group grid border-b border-gray-100 last:border-0 hover:bg-gray-50/40 min-h-[34px] items-center"
+      style={{ gridTemplateColumns: '28px 20px 1fr 56px 16px 56px 16px 40px 24px' }}>
+      {/* # */}
+      <div className="text-[10px] text-gray-400 font-bold flex items-center justify-center h-full border-r border-gray-100 bg-gray-50/60">{lineNum}</div>
+      {/* Badge */}
+      <div className="flex items-center justify-center h-full">
         {item.unit_label && (
-          <span className="text-[8px] bg-slate-100 text-slate-600 rounded px-1 py-0.5 shrink-0 font-medium whitespace-nowrap">
-            {item.unit_index}
-          </span>
+          <span className="text-[8px] bg-slate-800 text-white rounded-full w-4 h-4 flex items-center justify-center font-bold" title={item.unit_label}>{item.unit_index}</span>
         )}
-        <input className="flex-1 min-w-0 text-[12px] text-gray-700 bg-transparent focus:outline-none focus:bg-yellow-50 px-1" value={item.name} onChange={e => onChange(item.id,'name',e.target.value)} placeholder="panel" title={item.unit_label} />
       </div>
-      <div className="flex items-center gap-1 px-2 flex-1">
-        <input type="number" className={`w-[62px] ${inp}`} value={n(item.dimension_l)} onChange={e => onChange(item.id,'dimension_l',parseFloat(e.target.value)||0)} placeholder="L" />
-        <span className="text-gray-400 font-bold text-[13px]">×</span>
-        <input type="number" className={`w-[62px] ${inp}`} value={n(item.dimension_w)} onChange={e => onChange(item.id,'dimension_w',parseFloat(e.target.value)||0)} placeholder="W" />
-        <span className="text-gray-400 font-bold text-[13px]">=</span>
-        <input type="number" className={`w-[40px] ${inp}`} value={n(item.quantity)} onChange={e => onChange(item.id,'quantity',parseInt(e.target.value)||0)} placeholder="qty" />
-      </div>
-      <button className="no-print opacity-0 group-hover:opacity-100 px-1.5 text-gray-300 hover:text-red-400 transition shrink-0" onClick={() => onDelete(item.id)}>
+      {/* Name */}
+      <input className="text-[11px] text-gray-700 bg-transparent focus:outline-none focus:bg-yellow-50 px-2 h-full border-x border-gray-100 min-w-0" value={item.name} onChange={e => onChange(item.id,'name',e.target.value)} placeholder="panel" />
+      {/* L */}
+      <input type="number" className={`${inp} h-full px-1`} value={n(item.dimension_l)} onChange={e => onChange(item.id,'dimension_l',parseFloat(e.target.value)||0)} placeholder="L" />
+      {/* × */}
+      <span className="text-gray-400 font-bold text-[11px] text-center">×</span>
+      {/* W */}
+      <input type="number" className={`${inp} h-full px-1`} value={n(item.dimension_w)} onChange={e => onChange(item.id,'dimension_w',parseFloat(e.target.value)||0)} placeholder="W" />
+      {/* = */}
+      <span className="text-gray-400 font-bold text-[11px] text-center">=</span>
+      {/* qty */}
+      <input type="number" className={`${inp} h-full px-1`} value={n(item.quantity)} onChange={e => onChange(item.id,'quantity',parseInt(e.target.value)||0)} placeholder="qty" />
+      {/* delete */}
+      <button className="no-print opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-400 transition flex items-center justify-center h-full" onClick={() => onDelete(item.id)}>
         <Trash2 className="h-3 w-3" />
       </button>
     </div>
@@ -251,6 +257,66 @@ export default function CuttingListPreviewPage() {
     toast.success('Reset to original values');
   };
 
+  const handleExportPDF = async () => {
+    if (!orig) return;
+    try {
+      toast.info('Generating PDF...');
+      const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
+      const token = localStorage.getItem('auth_token');
+
+      // Flatten current edited sections
+      const sections = Object.entries(secs).map(([category, items]) => ({
+        category,
+        items: items
+          .filter(i => i.dimension_l || i.dimension_w || i.name)
+          .map(i => ({
+            name:        i.name,
+            unit_label:  i.unit_label ?? '',
+            unit_index:  i.unit_index ?? 0,
+            dimension_l: i.dimension_l,
+            dimension_w: i.dimension_w,
+            quantity:    i.quantity,
+          })),
+      })).filter(s => s.items.length > 0);
+
+      const payload = {
+        ...orig,
+        customer_name: header?.customer_name ?? orig.customer_name ?? '',
+        carcase_wood:  header?.carcase_wood  ?? orig.carcase_wood  ?? '',
+        date:          header?.date          ?? orig.date          ?? '',
+        fitting_date:  header?.fitting_date  ?? '',
+        outside_wood:  header?.outside_wood  ?? '',
+        door_wood:     header?.door_wood     ?? '',
+        sections,
+        accessories: [
+          { name: 'Shelf Pegs Plastic', qty: parseInt(acc.spegs)     || 0 },
+          { name: 'Overlay Splung',     qty: parseInt(acc.hinges)    || 0 },
+          { name: 'Legs 150',           qty: parseInt(acc.legs)      || 0 },
+          { name: 'sample',             qty: parseInt(acc.handles)   || 0 },
+          { name: 'Overlay Softclose',  qty: parseInt(acc.softclose) || 0 },
+        ].filter(a => a.qty > 0),
+      };
+
+      const res = await fetch(`${BACKEND_URL}/api/manual-cabinet/export-cutting-list-pdf`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body:    JSON.stringify(payload),
+      });
+
+      if (!res.ok) throw new Error(`Server error: ${res.status}`);
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url;
+      a.download = `${orig.project_name || 'cutting_list'}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('PDF downloaded');
+    } catch (e: any) {
+      toast.error(e.message || 'PDF export failed');
+    }
+  };
+
   // Line numbers
   const lineStarts: Record<string, number> = {};
   let c = 1;
@@ -285,36 +351,21 @@ export default function CuttingListPreviewPage() {
     <>
       <style>{`
         @media print {
-          @page { size: A4 portrait; margin: 6mm 5mm; }
-
-          /* Hide sidebar, navbar, toolbars — but keep page content visible */
+          @page { size: A4 portrait; margin: 0; }
+          /* Hide everything except the print-target */
+          body { margin: 0 !important; }
+          body > * { visibility: hidden; }
+          #print-target, #print-target * { visibility: visible; }
+          #print-target {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%;
+          }
           .no-print { display: none !important; }
-          nav { display: none !important; }
-          aside { display: none !important; }
-          [data-sidebar] { display: none !important; }
-          [role="navigation"] { display: none !important; }
-
-          /* Clean inputs and editable fields */
-          input {
-            border: none !important;
-            background: transparent !important;
-            outline: none !important;
-          }
-          [contenteditable] {
-            border: none !important;
-            background: transparent !important;
-            outline: none !important;
-          }
-
-          /* Preserve background colours (section labels etc.) */
-          * {
-            -webkit-print-color-adjust: exact !important;
-            print-color-adjust: exact !important;
-          }
+          input { border: none !important; background: transparent !important; outline: none !important; }
+          [contenteditable] { border: none !important; background: transparent !important; outline: none !important; }
+          * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
           .shadow-sm { box-shadow: none !important; }
-
-          /* Remove page padding so content fills the sheet */
-          .print-content { padding: 0 !important; }
         }
         input[type=number]::-webkit-outer-spin-button,
         input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
@@ -370,10 +421,10 @@ export default function CuttingListPreviewPage() {
         )}
 
         {/* Main card */}
-        <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden text-xs" style={{ zoom: 1.35 }}>
+        <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden text-xs" >
 
           {/* Header */}
-          <div className="grid grid-cols-[1fr_1fr_130px] border-b border-gray-200">
+          <div className="grid grid-cols-[1fr_1fr_100px] border-b border-gray-200">
             <div className="divide-y divide-gray-100 border-r border-gray-200">
               {header && (['CUSTOMER NAME','address','HOME ADDRESS','address','KITCHEN','kitchen','MODULAR','modular','SLIDING','sliding'] as any) &&
                 ([['CUSTOMER NAME','customer_name'],['HOME ADDRESS','address'],['KITCHEN','kitchen'],['MODULAR','modular'],['SLIDING','sliding']] as [string,keyof HeaderFields][])
