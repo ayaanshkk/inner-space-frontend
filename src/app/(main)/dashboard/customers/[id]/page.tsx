@@ -15,6 +15,7 @@ import {
   Briefcase, CheckSquare, MapPin, Calendar, User,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { Textarea } from "@/components/ui/textarea";
 
 // ============================================================
 // CONFIG & ROLES
@@ -158,6 +159,9 @@ export default function CustomerDetailsPage() {
   const [loading, setLoading]             = useState(true);
   const [hasAccess, setHasAccess]         = useState(true);
   const [isUpdatingStage, setIsUpdatingStage] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editData, setEditData] = useState<Partial<Customer>>({});
+  const [isSaving, setIsSaving] = useState(false);
 
   // Drawings
   const [selectedDrawings, setSelectedDrawings]             = useState<Set<string>>(new Set());
@@ -252,6 +256,22 @@ export default function CustomerDetailsPage() {
       .catch(() => setFinancialDocs([]));
 
     Promise.all([cP, pP]).finally(() => setLoading(false));
+  };
+
+  const handleSaveEdit = async () => {
+    if (!customer || isSaving) return;
+    setIsSaving(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/customers/${id}`, {
+        method: "PUT",
+        headers: getHeaders(),
+        body: JSON.stringify(editData),
+      });
+      if (!res.ok) throw new Error("Failed to save");
+      setCustomer((prev) => prev ? { ...prev, ...editData } : prev);
+      setIsEditing(false);
+    } catch { alert("Error saving changes"); }
+    finally { setIsSaving(false); }
   };
 
   // ── STAGE UPDATE — available to ALL roles ──────────────────
@@ -440,29 +460,62 @@ export default function CustomerDetailsPage() {
               Add Financial Document
             </Button>
 
-            {canEdit() && (
-              <Button
-                onClick={() => router.push(`/dashboard/customers/${id}/edit`)}
-                className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-white"
-              >
-                <Edit className="h-4 w-4" />
-                Edit
-              </Button>
-            )}
-
-            {canDelete() && (
-              <Button
-                variant="destructive"
-                onClick={async () => {
-                  if (!window.confirm("Delete this customer? This cannot be undone.")) return;
-                  await fetch(`${BACKEND_URL}/customers/${id}`, { method: "DELETE", headers: getHeaders() });
-                  router.push("/dashboard/customers");
-                }}
-                className="flex items-center gap-2"
-              >
-                <Trash2 className="h-4 w-4" />
-                Delete
-              </Button>
+            {/* Edit / Save / Cancel — inline, no page navigation */}
+            {isEditing ? (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() => { setIsEditing(false); setEditData({}); }}
+                  disabled={isSaving}
+                  className="border-gray-300"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleSaveEdit}
+                  disabled={isSaving}
+                  className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-white"
+                >
+                  {isSaving ? "Saving..." : "Save Changes"}
+                </Button>
+              </>
+            ) : (
+              <>
+                {canEdit() && (
+                  <Button
+                    onClick={() => {
+                      setEditData({
+                        name:     customer.name,
+                        phone:    customer.phone,
+                        email:    customer.email,
+                        address:  customer.address,
+                        postcode: customer.postcode,
+                        notes:    customer.notes,
+                      });
+                      setIsEditing(true);
+                      setActiveTab("info"); // always switch to info tab when editing
+                    }}
+                    className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-white"
+                  >
+                    <Edit className="h-4 w-4" />
+                    Edit
+                  </Button>
+                )}
+                {canDelete() && (
+                  <Button
+                    variant="destructive"
+                    onClick={async () => {
+                      if (!window.confirm("Delete this customer? This cannot be undone.")) return;
+                      await fetch(`${BACKEND_URL}/customers/${id}`, { method: "DELETE", headers: getHeaders() });
+                      router.push("/dashboard/customers");
+                    }}
+                    className="flex items-center gap-2"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Delete
+                  </Button>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -497,46 +550,87 @@ export default function CustomerDetailsPage() {
             <h2 className="mb-6 text-lg font-semibold text-gray-900">Contact Information</h2>
             <div className="space-y-8">
 
-              {/* Row 1 */}
+              {/* Row 1 — Name, Phone, Email */}
               <div className="grid grid-cols-3 gap-8">
                 <div>
                   <p className="text-sm text-gray-400 mb-1">Name</p>
-                  <p className="font-medium text-gray-900">{customer.name || "—"}</p>
+                  {isEditing ? (
+                    <Input
+                      value={editData.name || ""}
+                      onChange={(e) => setEditData((p) => ({ ...p, name: e.target.value }))}
+                      placeholder="Customer name"
+                    />
+                  ) : (
+                    <p className="font-medium text-gray-900">{customer.name || "—"}</p>
+                  )}
                 </div>
                 <div>
                   <p className="text-sm text-gray-400 mb-1">
                     Phone <span className="text-red-500">*</span>
                   </p>
-                  <p className="text-gray-900">{customer.phone || "—"}</p>
+                  {isEditing ? (
+                    <Input
+                      value={editData.phone || ""}
+                      onChange={(e) => setEditData((p) => ({ ...p, phone: e.target.value }))}
+                      placeholder="Phone number"
+                    />
+                  ) : (
+                    <p className="text-gray-900">{customer.phone || "—"}</p>
+                  )}
                 </div>
                 <div>
                   <p className="text-sm text-gray-400 mb-1">Email</p>
-                  <p className="text-gray-900">{customer.email || "—"}</p>
+                  {isEditing ? (
+                    <Input
+                      value={editData.email || ""}
+                      onChange={(e) => setEditData((p) => ({ ...p, email: e.target.value }))}
+                      placeholder="Email address"
+                      type="email"
+                    />
+                  ) : (
+                    <p className="text-gray-900">{customer.email || "—"}</p>
+                  )}
                 </div>
               </div>
 
-              {/* Row 2 */}
+              {/* Row 2 — Address, Postcode, Preferred Contact */}
               <div className="grid grid-cols-3 gap-8">
                 <div>
                   <p className="text-sm text-gray-400 mb-1">
                     Address <span className="text-red-500">*</span>
                   </p>
-                  <p className="text-gray-900">{customer.address || "—"}</p>
+                  {isEditing ? (
+                    <Input
+                      value={editData.address || ""}
+                      onChange={(e) => setEditData((p) => ({ ...p, address: e.target.value }))}
+                      placeholder="Address"
+                    />
+                  ) : (
+                    <p className="text-gray-900">{customer.address || "—"}</p>
+                  )}
                 </div>
                 <div>
                   <p className="text-sm text-gray-400 mb-1">
                     Postcode <span className="text-red-500">*</span>
                   </p>
-                  <div className="flex items-center gap-2 mt-1">
-                    {customer.postcode ? (
-                      <>
-                        <MapPin className="h-4 w-4 text-gray-400" />
-                        <span className="rounded-md bg-gray-100 px-2 py-0.5 font-mono text-sm text-gray-800">
-                          {customer.postcode}
-                        </span>
-                      </>
-                    ) : "—"}
-                  </div>
+                  {isEditing ? (
+                    <Input
+                      value={editData.postcode || ""}
+                      onChange={(e) => setEditData((p) => ({ ...p, postcode: e.target.value }))}
+                      placeholder="Postcode"
+                    />
+                  ) : (
+                    <div className="flex items-center gap-2 mt-1">
+                      {customer.postcode ? (
+                        <>
+                          <MapPin className="h-4 w-4 text-gray-400" />
+                          <span className="rounded-md bg-gray-100 px-2 py-0.5 font-mono text-sm text-gray-800">
+                            {customer.postcode}
+                          </span>
+                        </>
+                      ) : "—"}
+                    </div>
+                  )}
                 </div>
                 <div>
                   <p className="text-sm text-gray-400 mb-1">Preferred Contact</p>
@@ -544,7 +638,7 @@ export default function CustomerDetailsPage() {
                 </div>
               </div>
 
-              {/* Row 3 */}
+              {/* Row 3 — Project Type, Pipeline Stage, Customer Since */}
               <div className="grid grid-cols-3 gap-8">
                 <div>
                   <p className="text-sm text-gray-400 mb-1">Project Type</p>
@@ -552,13 +646,13 @@ export default function CustomerDetailsPage() {
                 </div>
                 <div>
                   <p className="text-sm text-gray-400 mb-2">Pipeline Stage</p>
-                  {/* Stage dropdown — available to ALL users */}
+                  {/* Stage dropdown always available to everyone */}
                   <Select
                     value={customer.stage || "Lead"}
                     onValueChange={handleStageChange}
                     disabled={isUpdatingStage}
                   >
-                    <SelectTrigger className="w-36 h-8 text-sm border-gray-300">
+                    <SelectTrigger className="w-40 h-9 text-sm border-gray-300">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -570,16 +664,46 @@ export default function CustomerDetailsPage() {
                 </div>
                 <div>
                   <p className="text-sm text-gray-400 mb-1">Customer Since</p>
-                  <p className="text-gray-900">{formatDate(customer.created_at)}</p>
+                  <p className="font-medium text-gray-900">{formatDate(customer.created_at)}</p>
                 </div>
               </div>
 
-              {customer.notes && (
+              {/* Notes — only show in edit mode or when value exists */}
+              {(isEditing || customer.notes) && (
                 <div>
                   <p className="text-sm text-gray-400 mb-1">Notes</p>
-                  <div className="rounded-lg bg-gray-50 p-3 text-sm whitespace-pre-wrap text-gray-900">
-                    {customer.notes}
-                  </div>
+                  {isEditing ? (
+                    <Textarea
+                      value={editData.notes || ""}
+                      onChange={(e) => setEditData((p) => ({ ...p, notes: e.target.value }))}
+                      placeholder="Add any notes..."
+                      className="min-h-[100px]"
+                    />
+                  ) : (
+                    <div className="rounded-lg bg-gray-50 p-3 text-sm whitespace-pre-wrap text-gray-900">
+                      {customer.notes}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Inline save/cancel at bottom of form when editing */}
+              {isEditing && (
+                <div className="flex justify-end gap-3 border-t border-gray-100 pt-6">
+                  <Button
+                    variant="outline"
+                    onClick={() => { setIsEditing(false); setEditData({}); }}
+                    disabled={isSaving}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleSaveEdit}
+                    disabled={isSaving}
+                    className="bg-gray-900 hover:bg-gray-700 text-white"
+                  >
+                    {isSaving ? "Saving..." : "Save Changes"}
+                  </Button>
                 </div>
               )}
             </div>

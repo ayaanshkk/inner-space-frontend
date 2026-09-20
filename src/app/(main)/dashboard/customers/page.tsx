@@ -352,12 +352,29 @@ export default function CustomersPage() {
                       <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                         <Select
                           value={customer.stage}
-                          disabled={updatingStageId === customer.id || (!isManagerOrHR(user?.role_ids) && !isSales(user?.role_ids))}
-                          onValueChange={(val) =>
-                            handleStageChange(customer.id, val, { stopPropagation: () => {} } as React.MouseEvent)
-                          }
+                          onValueChange={async (val) => {
+                            setUpdatingStageId(customer.id);
+                            try {
+                              await fetch(`${BACKEND_URL}/customers/${customer.id}/stage`, {
+                                method: "PATCH",
+                                headers: getHeaders(),
+                                body: JSON.stringify({ stage: val }),
+                              });
+                              setAllCustomers((prev) =>
+                                prev.map((c) => c.id === customer.id ? { ...c, stage: val as JobStage } : c)
+                              );
+                            } catch (err) {
+                              console.error(err);
+                            } finally {
+                              setUpdatingStageId(null);
+                            }
+                          }}
+                          disabled={updatingStageId === customer.id}
                         >
-                          <SelectTrigger className={`h-7 w-36 border-0 px-2 py-0 text-xs font-semibold rounded-full ${getStageColor(customer.stage)}`}>
+                          <SelectTrigger
+                            className={`h-7 w-36 border-0 px-2 py-0 text-xs font-semibold rounded-full ${getStageColor(customer.stage)}`}
+                            onClick={(e) => e.stopPropagation()}
+                          >
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
