@@ -599,7 +599,7 @@ export default function ManualCabinetEntryPage() {
     };
 
     // Store in sessionStorage then navigate — no backend call needed
-    sessionStorage.setItem('cutting_list_preview_data', JSON.stringify(payload));
+    sessionStorage.setItem('cutting_list_data', JSON.stringify(payload));
     window.open('/dashboard/cutting-list-preview', '_blank');
     toast.success('Opening cutting list preview...');
   };
@@ -792,7 +792,7 @@ export default function ManualCabinetEntryPage() {
       accessories:      [],
       material_summary: kitchenResult.material_summary,
     };
-    sessionStorage.setItem('cutting_list_preview_data', JSON.stringify(payload));
+    sessionStorage.setItem('cutting_list_data', JSON.stringify(payload));
     window.open('/dashboard/cutting-list-preview', '_blank');
     toast.success('Opening cutting list preview...');
   };
